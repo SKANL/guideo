@@ -54,10 +54,13 @@ export const DEFAULT_DISCOVERY_CONFIG: DiscoveryConfig = {
   formWaitTimeoutMs: 15_000,
   loginTimeoutMs: 15_000,
   loginPollIntervalMs: 250,
+  // Matched only as a failure signal when the element carries real text (see hasRealError) — an
+  // exact-class/role list, deliberately NOT the substring `[class*="error"]` (which also matches
+  // "errors"/"no-error"/etc. and invites false positives).
   loginErrorSelector:
-    '[role="alert"], [data-testid="auth-error"], .error, .alert-error, [class*="error"]',
+    '[role="alert"], [data-testid="auth-error"], .error, .alert-error, .alert-danger',
   navContainerSelectors: ["nav", "aside", "[role='navigation']", "[data-testid='sidebar']"],
   navItemSelector: "a[href], button, [role='link'], [role='menuitem'], [role='tab']",
-  navClickTimeoutMs: 8_000,
+  navClickTimeoutMs: 3_000,
   navPollIntervalMs: 200,
 };

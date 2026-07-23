@@ -357,6 +357,128 @@ describe("UrlCredsTarget", () => {
     await rm(outputPath, { force: true });
   });
 
+  // Regression (real e2e): the target URL is the app root ("/"), which REDIRECTS to "/login".
+  // Login success must be judged against the actual (post-redirect) login URL, not env.url — else
+  // seeing "/login" ≠ "/" reads as an instant false success, and the crawl maps the login page.
+  it("fails loudly when the app redirects to a login page and submit never leaves it", async () => {
+    const ROOT_URL = `${BASE_URL}/`;
+    process.env.GUIDEO_TARGET_URL = ROOT_URL;
+    let currentUrl = "";
+    const page: PatchrightPage = {
+      goto: async () => {
+        currentUrl = LOGIN_URL; // app redirects root -> /login
+      },
+      waitForSelector: async () => {},
+      fill: async () => {},
+      click: async () => {
+        // submit does NOT leave /login (async login still pending, or bad creds)
+      },
+      goBack: async () => {},
+      url: () => currentUrl,
+      title: async () => "Login",
+      $$: async () => [],
+      close: async () => {},
+    };
+    const browser: PatchrightBrowser = { newPage: async () => page, close: async () => {} };
+    const launcher: BrowserLauncher = async () => browser;
+    const target = new UrlCredsTarget(launcher, FAST_LOGIN_WAIT);
+
+    await expect(target.discover()).rejects.toThrow(/Login failed/);
+  });
+
+  // Regression (real e2e): an always-present EMPTY [role=alert]/aria-live container matches the
+  // error selector but is NOT an auth error. Login succeeds (URL transitions), so discover() must
+  // NOT throw just because an empty error container exists in the DOM.
+  it("does not treat an always-present empty error container as a login failure", async () => {
+    const errorSelector = '[role="alert"], .error';
+    let currentUrl = "";
+    const page: PatchrightPage = {
+      goto: async (url) => {
+        currentUrl = url;
+      },
+      waitForSelector: async () => {},
+      fill: async () => {},
+      click: async (selector) => {
+        if (selector === SUBMIT_SELECTOR) currentUrl = HOME_URL;
+      },
+      goBack: async () => {},
+      url: () => currentUrl,
+      title: async () => "Home",
+      $$: async (selector: string) => {
+        // The empty error container is always present (empty text = not a real error).
+        if (selector === errorSelector) return [fakeLink({ href: "", text: "" })];
+        return [];
+      },
+      close: async () => {},
+    };
+    const browser: PatchrightBrowser = { newPage: async () => page, close: async () => {} };
+    const launcher: BrowserLauncher = async () => browser;
+    const outputPath = join(tmpdir(), `guideo-flowgraph-emptyerr-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      ...FAST_LOGIN_WAIT,
+      loginErrorSelector: errorSelector,
+    });
+
+    await expect(target.discover()).resolves.not.toThrow();
+
+    await rm(outputPath, { force: true });
+  });
+
+  // Regression (real e2e): a nav container with real anchors must be used via the anchor fast
+  // path — NOT mixed with unscoped page buttons (the old `${container} ${listSelector}` only
+  // scoped the first comma-alternative, leaking every page button into nav discovery and burning
+  // a click+timeout on each). When anchors exist, no non-submit element should ever be clicked.
+  it("uses nav anchors and never clicks non-nav buttons when anchors are present", async () => {
+    const A_URL = `${BASE_URL}/a`;
+    const B_URL = `${BASE_URL}/b`;
+    const DEFAULT_ITEM_SEL = "a[href], button, [role='link'], [role='menuitem'], [role='tab']";
+    const anchors = [fakeLink({ href: "/a", text: "A" }), fakeLink({ href: "/b", text: "B" })];
+    const strayButton = fakeLink({ href: "", text: "Action", testid: "stray-btn" });
+    let currentUrl = "";
+    const click = vi.fn(async (selector: string) => {
+      if (selector === SUBMIT_SELECTOR) currentUrl = HOME_URL;
+      // A stray button click must never happen; if it did, it would NOT navigate anyway.
+    });
+    const page: PatchrightPage = {
+      goto: async (url) => {
+        currentUrl = url;
+      },
+      waitForSelector: async () => {},
+      fill: async () => {},
+      click,
+      goBack: async () => {},
+      url: () => currentUrl,
+      title: async () => "Home",
+      $$: async (selector: string) => {
+        const onHome = normalize(currentUrl) === normalize(HOME_URL);
+        if (!onHome) return [];
+        if (selector === "nav a[href]") return anchors; // fixed anchor-first path
+        if (selector === `nav ${DEFAULT_ITEM_SEL}`) return [...anchors, strayButton]; // old leaky path
+        if (selector === "a[href]") return anchors;
+        return [];
+      },
+      close: async () => {},
+    };
+    const browser: PatchrightBrowser = { newPage: async () => page, close: async () => {} };
+    const launcher: BrowserLauncher = async () => browser;
+    const outputPath = join(tmpdir(), `guideo-flowgraph-anchorpref-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      ...FAST_LOGIN_WAIT,
+      navClickTimeoutMs: 50,
+      navPollIntervalMs: 10,
+    });
+
+    const graph = await target.discover();
+
+    expect(click).not.toHaveBeenCalledWith('[data-testid="stray-btn"]');
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(A_URL));
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(B_URL));
+
+    await rm(outputPath, { force: true });
+  });
+
   // --- Defect 2: hydration-aware login + SPA-aware nav discovery ---------------------------
 
   it("waits for the login form (password field) before filling it — hydration-aware login", async () => {

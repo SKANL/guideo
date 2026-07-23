@@ -130,6 +130,16 @@ function isSameOrigin(url: string, baseUrl: string): boolean {
   return new URL(url).origin === new URL(baseUrl).origin;
 }
 
+// Scopes a container prefix to EACH comma-alternative of a selector list. CSS binds a descendant
+// combinator only to the alternative it directly precedes, so `nav a, button` means `nav a` OR any
+// `button` — not `nav a` OR `nav button`. This rewrites it to the latter.
+function scopeSelectorList(container: string, selectorList: string): string {
+  return selectorList
+    .split(",")
+    .map((part) => `${container} ${part.trim()}`)
+    .join(", ");
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -186,10 +196,14 @@ export class UrlCredsTarget implements Target {
     await page.waitForSelector(this.config.passwordSelector, {
       timeout: this.config.formWaitTimeoutMs,
     });
+    // The ACTUAL login URL after any redirect (env.url may be the app root "/" that redirects to
+    // "/login"). Login success is a transition away from THIS url — comparing against env.url would
+    // read the initial redirect as an instant false success (real e2e).
+    const loginUrl = page.url() || env.url;
     await page.fill(this.config.usernameSelector, env.username);
     await page.fill(this.config.passwordSelector, env.password);
     await page.click(this.config.submitSelector);
-    await this.verifyLoginSucceeded(page, env.url);
+    await this.verifyLoginSucceeded(page, loginUrl);
   }
 
   // Polls (bounded by loginTimeoutMs) for either an auth-error indicator or a URL change away
@@ -201,15 +215,28 @@ export class UrlCredsTarget implements Target {
     const deadline = Date.now() + this.config.loginTimeoutMs;
 
     while (true) {
-      const errorElements = await page.$$(this.config.loginErrorSelector);
-      if (errorElements.length > 0) throw new Error(LOGIN_FAILED_MESSAGE);
-
+      // Success takes priority: a URL change away from the login route means we're authenticated.
       const currentUrl = page.url();
       if (currentUrl && normalizeUrl(currentUrl) !== normalizedLoginUrl) return;
+
+      // A failure requires a REAL error — an error element carrying actual text. An always-present
+      // empty [role=alert]/aria-live container (common in SPAs) matches the selector but has no
+      // text; treating its mere presence as a failure false-positived logins that had actually
+      // succeeded (see e2e-findings).
+      if (await this.hasRealError(page)) throw new Error(LOGIN_FAILED_MESSAGE);
 
       if (Date.now() >= deadline) throw new Error(LOGIN_FAILED_MESSAGE);
       await sleep(this.config.loginPollIntervalMs);
     }
+  }
+
+  // True only if at least one error-selector match carries non-empty text — guards against
+  // always-present empty alert/aria-live containers that match the selector but signal nothing.
+  private async hasRealError(page: PatchrightPage): Promise<boolean> {
+    for (const el of await page.$$(this.config.loginErrorSelector)) {
+      if ((await el.textContent())?.trim()) return true;
+    }
+    return false;
   }
 
   // Own poll-based waiter (not a native waitForURL) — keeps both login-outcome and nav-click
@@ -231,12 +258,25 @@ export class UrlCredsTarget implements Target {
     }
   }
 
-  // SPA-aware primary-nav discovery: tries each candidate container selector (nav/aside/etc.) in
-  // order, falling back to the bare item selector (whole document) if none match — covers apps
-  // with no nav wrapper.
+  // SPA-aware primary-nav discovery. Anchors (`a[href]`) are the reliable, FAST signal — the crawl
+  // reads their href without clicking — so prefer them: within a nav container first, then the
+  // whole page. Only when a page exposes NO anchors at all do we fall back to clickable
+  // button/router items (pure client-router SPA), which cost a click + URL-change wait each.
+  //
+  // The fallback scopes EACH comma-alternative of navItemSelector to the container: a naive
+  // `${container} ${listSelector}` only binds the container to the first alternative, leaking
+  // every unscoped page button into nav discovery and burning a click+timeout on each (real e2e).
   private async findNavItems(page: PatchrightPage): Promise<PatchrightElementHandle[]> {
     for (const container of this.config.navContainerSelectors) {
-      const items = await page.$$(`${container} ${this.config.navItemSelector}`);
+      const anchors = await page.$$(`${container} a[href]`);
+      if (anchors.length > 0) return anchors;
+    }
+    const pageAnchors = await page.$$("a[href]");
+    if (pageAnchors.length > 0) return pageAnchors;
+
+    for (const container of this.config.navContainerSelectors) {
+      const scoped = scopeSelectorList(container, this.config.navItemSelector);
+      const items = await page.$$(scoped);
       if (items.length > 0) return items;
     }
     return page.$$(this.config.navItemSelector);
