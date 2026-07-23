@@ -160,9 +160,11 @@ export class WebRecordingEngine implements RecordingEngine {
   ): Promise<{ mousePosition: Point; elapsedMs: number }> {
     switch (step.action) {
       case "navigate": {
-        await page.goto(String(step.params?.url ?? ""), {
-          waitUntil: this.config.navigateWaitUntil,
-        });
+        // The storyboard's navigate URL is model-authored, and the LLM is inconsistent about the
+        // param key (url / route / href) — read all common variants rather than fail on an empty
+        // goto (real e2e: a plan run put it under `route`, not `url`).
+        const url = String(step.params?.url ?? step.params?.route ?? step.params?.href ?? "");
+        await page.goto(url, { waitUntil: this.config.navigateWaitUntil });
         return { mousePosition, elapsedMs: 0 };
       }
       case "click": {

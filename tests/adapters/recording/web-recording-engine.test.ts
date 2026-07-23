@@ -143,6 +143,28 @@ describe("WebRecordingEngine", () => {
     }
   });
 
+  it("reads the navigate URL from params.route when params.url is absent (LLM key variance)", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "navigate",
+          params: { route: "https://example.com/agency" },
+          narrationSegmentId: "seg-1",
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+    await engine.capture(approved);
+
+    expect(harness.goto).toHaveBeenCalledWith("https://example.com/agency", {
+      waitUntil: "networkidle",
+    });
+  });
+
   it("drives every storyboard action type in order through humanized mouse/keyboard and returns a RawClip", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({
