@@ -10,6 +10,9 @@ coverage/
 .atl/
 .codegraph/
 
+# Guideo runtime output (discovered graph, plans, clips)
+.guideo/
+
 # OS cruft
 .DS_Store
 Thumbs.db
