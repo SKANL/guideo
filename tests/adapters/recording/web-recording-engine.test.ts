@@ -58,6 +58,9 @@ function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
   const type = vi.fn(async (text: string) => {
     log.push(`type:${text}`);
   });
+  const press = vi.fn(async (key: string) => {
+    log.push(`press:${key}`);
+  });
   const waitForTimeout = vi.fn(async (ms: number) => {
     log.push(`wait:${ms}`);
   });
@@ -78,7 +81,7 @@ function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
     $$: async () => [],
     $,
     mouse: { move },
-    keyboard: { type },
+    keyboard: { type, press },
     waitForTimeout,
     video: () => ({ path: async () => "/tmp/guideo-capture/video.webm" }),
     close: closePage,
@@ -107,6 +110,7 @@ function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
     waitForSelector,
     move,
     type,
+    press,
     waitForTimeout,
     $,
     newContext,
@@ -166,16 +170,18 @@ describe("WebRecordingEngine", () => {
     const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(42));
     const clip = await engine.capture(approved);
 
-    // navigate
-    expect(harness.goto).toHaveBeenCalledWith("https://example.com/dashboard");
-    // click
-    expect(harness.click).toHaveBeenCalledWith("#login-btn");
+    // navigate — waits for the configured settle state, not left to the default
+    expect(harness.goto).toHaveBeenCalledWith("https://example.com/dashboard", {
+      waitUntil: "networkidle",
+    });
+    // click — targets the :visible match (multiple DOM matches can exist for one selector)
+    expect(harness.click).toHaveBeenCalledWith("#login-btn:visible");
     // type: per-char keyboard input, not a single whole-string call
     expect(harness.type).toHaveBeenCalledTimes(2);
     expect(harness.type).toHaveBeenNthCalledWith(1, "h");
     expect(harness.type).toHaveBeenNthCalledWith(2, "i");
-    // hover
-    expect(harness.hover).toHaveBeenCalledWith("#menu");
+    // hover — same :visible targeting as click
+    expect(harness.hover).toHaveBeenCalledWith("#menu:visible");
 
     // mouse: multiple eased move() calls across click/type/hover/zoom targets — not a teleport
     expect(harness.move.mock.calls.length).toBeGreaterThan(20);
@@ -188,10 +194,12 @@ describe("WebRecordingEngine", () => {
 
     // action order preserved: navigate before click before type before hover
     expect(harness.log.indexOf("goto:https://example.com/dashboard")).toBeLessThan(
-      harness.log.indexOf("click:#login-btn"),
+      harness.log.indexOf("click:#login-btn:visible"),
     );
-    expect(harness.log.indexOf("click:#login-btn")).toBeLessThan(harness.log.indexOf("type:h"));
-    expect(harness.log.indexOf("type:i")).toBeLessThan(harness.log.indexOf("hover:#menu"));
+    expect(harness.log.indexOf("click:#login-btn:visible")).toBeLessThan(
+      harness.log.indexOf("type:h"),
+    );
+    expect(harness.log.indexOf("type:i")).toBeLessThan(harness.log.indexOf("hover:#menu:visible"));
 
     // video recording enabled + finalized
     expect(harness.newContext).toHaveBeenCalledWith(
@@ -265,7 +273,9 @@ describe("WebRecordingEngine", () => {
     const fillUsernameIndex = harness.log.indexOf(`fill:${DEFAULT_LOGIN_CONFIG.usernameSelector}`);
     const fillPasswordIndex = harness.log.indexOf(`fill:${DEFAULT_LOGIN_CONFIG.passwordSelector}`);
     const submitIndex = harness.log.indexOf(`click:${DEFAULT_LOGIN_CONFIG.submitSelector}`);
-    const storyboardClickIndex = harness.log.indexOf('click:role=link[name="Manifestaciones"]');
+    const storyboardClickIndex = harness.log.indexOf(
+      'click:role=link[name="Manifestaciones"]:visible',
+    );
 
     expect(gotoIndex).toBeGreaterThanOrEqual(0);
     expect(waitIndex).toBeGreaterThan(gotoIndex);
@@ -298,7 +308,101 @@ describe("WebRecordingEngine", () => {
     );
 
     await expect(engine.capture(approved)).rejects.toThrow(/Login failed/);
-    expect(harness.click).not.toHaveBeenCalledWith('role=link[name="Manifestaciones"]');
+    expect(harness.click).not.toHaveBeenCalledWith('role=link[name="Manifestaciones"]:visible');
     expect(harness.browserClose).toHaveBeenCalled();
+  });
+
+  // --- Dismiss blocking onboarding overlays (real e2e finding) ------------------------------
+
+  it("presses the dismiss key after login and after each navigate step, before any click", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "navigate",
+          params: { url: "https://example.com/dashboard" },
+          narrationSegmentId: "seg-1",
+        },
+        { action: "click", selector: "#nav-link", narrationSegmentId: "seg-1" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+    await engine.capture(approved);
+
+    expect(harness.press).toHaveBeenCalledWith("Escape");
+    // 2 presses after login + 2 after the single navigate step (default dismissPresses: 2).
+    expect(harness.press.mock.calls.length).toBe(4);
+
+    const submitIndex = harness.log.indexOf(`click:${DEFAULT_LOGIN_CONFIG.submitSelector}`);
+    const gotoIndex = harness.log.indexOf("goto:https://example.com/dashboard");
+    const clickIndex = harness.log.indexOf("click:#nav-link:visible");
+    const firstPressIndex = harness.log.indexOf("press:Escape");
+    const pressAfterNavIndex = harness.log.indexOf("press:Escape", gotoIndex + 1);
+
+    // dismissed once right after login, before the first storyboard step (navigate)...
+    expect(firstPressIndex).toBeGreaterThan(submitIndex);
+    expect(firstPressIndex).toBeLessThan(gotoIndex);
+    // ...and again right after navigate, before the click.
+    expect(pressAfterNavIndex).toBeGreaterThan(gotoIndex);
+    expect(pressAfterNavIndex).toBeLessThan(clickIndex);
+  });
+
+  it("does not press the dismiss key when dismissOverlays is disabled", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "#a", narrationSegmentId: "seg-1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1), undefined, {
+      dismissOverlays: false,
+    });
+    await engine.capture(approved);
+
+    expect(harness.press).not.toHaveBeenCalled();
+  });
+
+  it("navigates with the configured waitUntil option", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "navigate",
+          params: { url: "https://example.com/x" },
+          narrationSegmentId: "seg-1",
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1), undefined, {
+      navigateWaitUntil: "load",
+    });
+    await engine.capture(approved);
+
+    expect(harness.goto).toHaveBeenCalledWith("https://example.com/x", { waitUntil: "load" });
+  });
+
+  it("resolves click/hover selectors to the :visible match when a selector could match multiple elements", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "click", selector: 'a[href="/x"]', narrationSegmentId: "seg-1" },
+        { action: "hover", selector: 'a[href="/y"]', narrationSegmentId: "seg-1" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+    await engine.capture(approved);
+
+    expect(harness.click).toHaveBeenCalledWith('a[href="/x"]:visible');
+    expect(harness.hover).toHaveBeenCalledWith('a[href="/y"]:visible');
   });
 });

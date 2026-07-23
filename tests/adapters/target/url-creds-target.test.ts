@@ -27,6 +27,7 @@ interface FakeLinkSpec {
   href: string;
   text?: string;
   testid?: string;
+  id?: string;
 }
 
 interface FakePageSpec {
@@ -37,8 +38,11 @@ interface FakePageSpec {
 function fakeLink(spec: FakeLinkSpec): PatchrightElementHandle {
   return {
     async getAttribute(name) {
-      if (name === "href") return spec.href;
+      // Empty string means "not an anchor" (no href attribute at all) throughout this fixture's
+      // callers — mirrors a real DOM button, which has no href attribute to read.
+      if (name === "href") return spec.href || null;
       if (name === "data-testid") return spec.testid ?? null;
+      if (name === "id") return spec.id ?? null;
       return null;
     },
     async textContent() {
@@ -553,26 +557,57 @@ describe("UrlCredsTarget", () => {
   });
 });
 
+// patchright (the undetected Playwright fork used for capture/replay) DISABLES the accessibility
+// tree, so `role=`/getByRole selectors match ZERO elements on a real page (verified live against
+// camtom-webapp.vercel.app). buildRobustSelector must therefore emit only CSS/DOM selectors.
 describe("buildRobustSelector", () => {
   it("prefers data-testid over every other attribute", async () => {
     const selector = await buildRobustSelector(
-      fakeLink({ href: "/x", text: "Ignored", testid: "nav-dashboard" }),
+      fakeLink({ href: "/x", id: "nav-1", text: "Ignored", testid: "nav-dashboard" }),
     );
     expect(selector).toBe('[data-testid="nav-dashboard"]');
   });
 
-  it("falls back to an accessible link-role selector when no testid is present and href exists", async () => {
+  it("falls back to an id selector when no data-testid is present", async () => {
+    const selector = await buildRobustSelector(
+      fakeLink({ href: "/x", id: "nav-settings", text: "Ignored" }),
+    );
+    expect(selector).toBe("#nav-settings");
+  });
+
+  it("falls back to the raw href as a CSS attribute selector when no testid or id is present", async () => {
     const selector = await buildRobustSelector(fakeLink({ href: "/x", text: "Dashboard" }));
-    expect(selector).toBe('role=link[name="Dashboard"]');
-  });
-
-  it("falls back to an accessible button-role selector for a non-anchor item with no href", async () => {
-    const selector = await buildRobustSelector(fakeLink({ href: "", text: "Reports" }));
-    expect(selector).toBe('role=button[name="Reports"]');
-  });
-
-  it("falls back to the raw href as a last resort", async () => {
-    const selector = await buildRobustSelector(fakeLink({ href: "/x" }));
     expect(selector).toBe('a[href="/x"]');
+  });
+
+  it("falls back to a DOM text-engine selector for a non-anchor item with no href", async () => {
+    const selector = await buildRobustSelector(fakeLink({ href: "", text: "Reports" }));
+    expect(selector).toBe('text="Reports"');
+  });
+
+  it("falls back to a bare tag selector when no identifying attribute is present", async () => {
+    expect(await buildRobustSelector(fakeLink({ href: "" }))).toBe("button");
+
+    // An anchor with a present-but-empty href attribute (real getAttribute returns "", not null)
+    // still falls back to the "a" tag, not "button".
+    const emptyHrefAnchor: PatchrightElementHandle = {
+      getAttribute: async (name) => (name === "href" ? "" : null),
+      textContent: async () => null,
+    };
+    expect(await buildRobustSelector(emptyHrefAnchor)).toBe("a");
+  });
+
+  it("never emits a role= selector", async () => {
+    const specs: FakeLinkSpec[] = [
+      { href: "/x", testid: "nav-dashboard", text: "Dashboard" },
+      { href: "/x", id: "nav-settings", text: "Settings" },
+      { href: "/x", text: "Dashboard" },
+      { href: "", text: "Reports" },
+      { href: "" },
+    ];
+    for (const spec of specs) {
+      const selector = await buildRobustSelector(fakeLink(spec));
+      expect(selector).not.toMatch(/^role=/);
+    }
   });
 });

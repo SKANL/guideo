@@ -35,9 +35,11 @@ export interface PatchrightMouse {
 }
 
 // Only per-character type() calls are used (never a whole-string call) — that per-keystroke
-// granularity is what lets capture() insert a jittered delay before each character.
+// granularity is what lets capture() insert a jittered delay before each character. press() is
+// used only to dismiss blocking overlays (see dismissOverlays()), never for text entry.
 export interface PatchrightKeyboard {
   type(text: string): Promise<void>;
+  press(key: string): Promise<void>;
 }
 
 export interface PatchrightVideo {
@@ -76,6 +78,14 @@ function requireSelector(step: StoryboardStep): string {
   return step.selector;
 }
 
+// Real e2e finding: the same selector can match more than one DOM element (e.g. an `a[href]` in
+// both a sidebar and a dashboard card) — only one is actually visible/clickable. Appending the
+// `:visible` pseudo-class resolves click/hover targeting to the visible match instead of
+// whichever one the engine happens to return first.
+function visibleSelector(selector: string): string {
+  return `${selector}:visible`;
+}
+
 export class WebRecordingEngine implements RecordingEngine {
   private readonly injectedLauncher: CaptureBrowserLauncher | undefined;
   private readonly random: Random;
@@ -111,6 +121,9 @@ export class WebRecordingEngine implements RecordingEngine {
       // BEFORE running any storyboard step, so clicks on authenticated routes don't time out.
       const env = readTargetEnvOrThrow();
       await login(page, env, this.loginConfig);
+      // Real e2e finding: an onboarding/welcome dialog covers the nav right after login and
+      // intercepts every click's actionability check — clear it before driving any step.
+      await this.dismissOverlays(page);
 
       let mousePosition = this.config.initialMousePosition;
       let elapsedMs = 0;
@@ -123,6 +136,9 @@ export class WebRecordingEngine implements RecordingEngine {
         const result = await this.runStep(page, step, mousePosition);
         mousePosition = result.mousePosition;
         elapsedMs += result.elapsedMs;
+
+        // Same overlay can reappear (or a new one open) after a client-side route change.
+        if (step.action === "navigate") await this.dismissOverlays(page);
       }
 
       const video = page.video();
@@ -144,19 +160,21 @@ export class WebRecordingEngine implements RecordingEngine {
   ): Promise<{ mousePosition: Point; elapsedMs: number }> {
     switch (step.action) {
       case "navigate": {
-        await page.goto(String(step.params?.url ?? ""));
+        await page.goto(String(step.params?.url ?? ""), {
+          waitUntil: this.config.navigateWaitUntil,
+        });
         return { mousePosition, elapsedMs: 0 };
       }
       case "click": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
-        await page.click(requireSelector(step));
+        await page.click(visibleSelector(requireSelector(step)));
         return { mousePosition: target, elapsedMs: moveMs };
       }
       case "hover": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
-        await page.hover(requireSelector(step));
+        await page.hover(visibleSelector(requireSelector(step)));
         return { mousePosition: target, elapsedMs: moveMs };
       }
       case "zoom": {
@@ -169,7 +187,7 @@ export class WebRecordingEngine implements RecordingEngine {
       case "type": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
-        await page.click(requireSelector(step));
+        await page.click(visibleSelector(requireSelector(step)));
         const typeMs = await this.typeText(page, String(step.params?.text ?? ""));
         return { mousePosition: target, elapsedMs: moveMs + typeMs };
       }
@@ -185,7 +203,7 @@ export class WebRecordingEngine implements RecordingEngine {
   }
 
   private async resolveCenter(page: PatchrightCapturePage, step: StoryboardStep): Promise<Point> {
-    const selector = requireSelector(step);
+    const selector = visibleSelector(requireSelector(step));
     const handle = await page.$(selector);
     const box = await handle?.boundingBox();
     if (!box) {
@@ -205,6 +223,17 @@ export class WebRecordingEngine implements RecordingEngine {
       elapsed += delayMs;
     }
     return elapsed;
+  }
+
+  // Presses `dismissKey` `dismissPresses` times, with a `dismissWaitMs` pause between presses, to
+  // clear an onboarding/welcome overlay that would otherwise intercept every subsequent click. A
+  // no-op when `dismissOverlays` is disabled.
+  private async dismissOverlays(page: PatchrightCapturePage): Promise<void> {
+    if (!this.config.dismissOverlays) return;
+    for (let i = 0; i < this.config.dismissPresses; i++) {
+      await page.keyboard.press(this.config.dismissKey);
+      await page.waitForTimeout(this.config.dismissWaitMs);
+    }
   }
 
   private async typeText(page: PatchrightCapturePage, text: string): Promise<number> {

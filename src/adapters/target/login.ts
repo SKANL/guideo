@@ -9,7 +9,7 @@
 //       after goto()), not env.url — env.url may be the app root that redirects to "/login".
 //   (c) a stuck/failed login fails loudly (throws), never silently proceeds to crawl/capture.
 
-type WaitUntil = "load" | "domcontentloaded" | "networkidle";
+export type WaitUntil = "load" | "domcontentloaded" | "networkidle";
 
 // Narrow structural subset of patchright's ElementHandle — only what login/discovery read to
 // build a robust selector or check error text. A real patchright ElementHandle satisfies this

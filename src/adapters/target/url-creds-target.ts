@@ -41,33 +41,29 @@ export type {
 // definitions now live in ./login.js, shared with capture's login.
 export { readTargetEnvOrThrow };
 
-// Robust-selector priority for a discovered nav item: data-testid > accessible role/name >
-// id > raw href > tag fallback. Prefers stable attributes over brittle positional selectors, per
-// the discovery spec's "robust selectors" requirement — this feeds later capture/replay. Role
-// defaults to "link" for anchors and "button" for everything else (buttons/role items), or uses
-// an explicit `role` attribute when present.
+// Robust-selector priority for a discovered nav item: data-testid > id > raw href > visible text
+// > tag fallback. CSS/DOM-based only — NEVER `role=` (patchright, the undetected Playwright fork
+// used for capture/replay, DISABLES the accessibility tree, so `getByRole`/`role=` selectors match
+// ZERO elements on a real page; verified live against camtom-webapp.vercel.app). Prefers stable
+// attributes over brittle positional selectors, per the discovery spec's "robust selectors"
+// requirement — this feeds later capture/replay.
 export async function buildRobustSelector(link: PatchrightElementHandle): Promise<string> {
   const testId = await link.getAttribute("data-testid");
   if (testId) return `[data-testid="${testId}"]`;
 
-  const href = await link.getAttribute("href");
-  const explicitRole = await link.getAttribute("role");
-  const roleName = explicitRole || (href ? "link" : "button");
-
-  const ariaLabel = await link.getAttribute("aria-label");
-  if (ariaLabel) return `role=${roleName}[name="${ariaLabel}"]`;
-
-  const text = (await link.textContent())?.trim();
-  if (text) return `role=${roleName}[name="${text}"]`;
-
   const id = await link.getAttribute("id");
   if (id) return `#${id}`;
 
+  const href = await link.getAttribute("href");
   if (href) return `a[href="${href}"]`;
 
-  // ponytail: no identifying attribute found on a non-anchor item — rare given real nav items
-  // normally carry visible text or an aria-label; last-resort tag selector.
-  return "button";
+  // Playwright/patchright's text engine — DOM text-content matching, not the accessibility tree.
+  const text = (await link.textContent())?.trim();
+  if (text) return `text="${text}"`;
+
+  // ponytail: no identifying attribute found — last-resort tag selector. An anchor with an empty
+  // (but present) href attribute still gets "a"; anything else falls back to "button".
+  return href !== null ? "a" : "button";
 }
 
 function isSameOrigin(url: string, baseUrl: string): boolean {

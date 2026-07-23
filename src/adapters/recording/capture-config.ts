@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import type { WaitUntil } from "../target/login.js";
 
 // Non-human-feel capture knobs — where video lands, viewport size, and where the (virtual) mouse
 // starts. Tunable per-instance via WebRecordingEngine's constructor, same pattern as
@@ -10,6 +11,16 @@ export interface CaptureConfig {
   // 16:9 by default — spec requires a platform-agnostic 16:9-ish raw clip (compose reframes it).
   readonly viewport: { readonly width: number; readonly height: number };
   readonly initialMousePosition: { readonly x: number; readonly y: number };
+  // Real e2e finding: an onboarding/welcome Radix dialog covers the nav and intercepts every
+  // click. When true, capture() presses `dismissKey` `dismissPresses` times (after login and
+  // after each navigate step) to clear it before interacting with the page.
+  readonly dismissOverlays: boolean;
+  readonly dismissKey: string;
+  readonly dismissPresses: number;
+  readonly dismissWaitMs: number;
+  // How goto() waits for a "navigate" step to settle — client-rendered SPAs need "networkidle" (or
+  // at least "load"); "domcontentloaded" fires before hydration.
+  readonly navigateWaitUntil: WaitUntil;
 }
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
@@ -18,4 +29,9 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   videoDir: tmpdir(),
   viewport: { width: 1280, height: 720 },
   initialMousePosition: { x: 0, y: 0 },
+  dismissOverlays: true,
+  dismissKey: "Escape",
+  dismissPresses: 2,
+  dismissWaitMs: 300,
+  navigateWaitUntil: "networkidle",
 };
