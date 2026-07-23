@@ -8,6 +8,7 @@ coverage/
 
 # SDD / tooling local state
 .atl/
+.codegraph/
 
 # OS cruft
 .DS_Store
