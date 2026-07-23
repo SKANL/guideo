@@ -16,6 +16,8 @@ import type { RawClip } from "../../domain/models/media.js";
 import type { ApprovedStoryboard, StoryboardStep } from "../../domain/models/storyboard.js";
 import type { Random } from "../../domain/ports/random.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
+import type { LoginConfig } from "../target/login.js";
+import { DEFAULT_LOGIN_CONFIG, login, readTargetEnvOrThrow } from "../target/login.js";
 import type { PatchrightElementHandle, PatchrightPage } from "../target/url-creds-target.js";
 import { type CaptureConfig, DEFAULT_CAPTURE_CONFIG } from "./capture-config.js";
 import { DEFAULT_HUMAN_FEEL_CONFIG, type HumanFeelConfig } from "./human-feel-config.js";
@@ -79,17 +81,20 @@ export class WebRecordingEngine implements RecordingEngine {
   private readonly random: Random;
   private readonly humanFeel: HumanFeelConfig;
   private readonly config: CaptureConfig;
+  private readonly loginConfig: LoginConfig;
 
   constructor(
     launcher?: CaptureBrowserLauncher,
     random: Random = new SeededRandom(Date.now()),
     humanFeel: Partial<HumanFeelConfig> = {},
     config: Partial<CaptureConfig> = {},
+    loginConfig: Partial<LoginConfig> = {},
   ) {
     this.injectedLauncher = launcher;
     this.random = random;
     this.humanFeel = { ...DEFAULT_HUMAN_FEEL_CONFIG, ...humanFeel };
     this.config = { ...DEFAULT_CAPTURE_CONFIG, ...config };
+    this.loginConfig = { ...DEFAULT_LOGIN_CONFIG, ...loginConfig };
   }
 
   async capture(storyboard: ApprovedStoryboard): Promise<RawClip> {
@@ -102,6 +107,11 @@ export class WebRecordingEngine implements RecordingEngine {
       });
 
       const page = await context.newPage();
+      // Authenticate the SAME way discovery does (shared login.ts — see its bug-fix history)
+      // BEFORE running any storyboard step, so clicks on authenticated routes don't time out.
+      const env = readTargetEnvOrThrow();
+      await login(page, env, this.loginConfig);
+
       let mousePosition = this.config.initialMousePosition;
       let elapsedMs = 0;
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SeededRandom } from "../../../src/adapters/recording/seeded-random.js";
 import type {
   CaptureBrowserLauncher,
@@ -7,8 +7,14 @@ import type {
   PatchrightCapturePage,
 } from "../../../src/adapters/recording/web-recording-engine.js";
 import { WebRecordingEngine } from "../../../src/adapters/recording/web-recording-engine.js";
+import { DEFAULT_LOGIN_CONFIG } from "../../../src/adapters/target/login.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { review } from "../../../src/domain/review-gate.js";
+
+const LOGIN_URL = "https://target.example.com/login";
+const LOGGED_IN_URL = "https://target.example.com/home";
+// Short timeouts so the login-failure RED path doesn't slow the suite down.
+const FAST_LOGIN_WAIT = { loginTimeoutMs: 30, loginPollIntervalMs: 5 };
 
 function fakeElement(box: { x: number; y: number; width: number; height: number }) {
   return {
@@ -21,16 +27,30 @@ function fakeElement(box: { x: number; y: number; width: number; height: number 
 // Builds a fully mocked patchright capture harness (browser -> context -> page). Every call is
 // logged into a shared, ordered `log` array so tests can assert both call counts AND ordering
 // (e.g. a pacing delay precedes each individual mouse move / keystroke) without a real browser.
-function fakeCaptureHarness() {
+// The fake page also tracks a mutable URL so the shared login() (see login.ts) can drive it: goto
+// sets the current URL, and submitting login transitions off it (unless `staysOnLogin`, which
+// simulates a stuck/failed login for the login-failure test).
+function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
   const log: string[] = [];
+  let currentUrl = "";
   const goto = vi.fn(async (url: string) => {
+    currentUrl = url;
     log.push(`goto:${url}`);
+  });
+  const fill = vi.fn(async (selector: string) => {
+    log.push(`fill:${selector}`);
   });
   const click = vi.fn(async (selector: string) => {
     log.push(`click:${selector}`);
+    if (selector === DEFAULT_LOGIN_CONFIG.submitSelector && !options.staysOnLogin) {
+      currentUrl = LOGGED_IN_URL;
+    }
   });
   const hover = vi.fn(async (selector: string) => {
     log.push(`hover:${selector}`);
+  });
+  const waitForSelector = vi.fn(async () => {
+    log.push("waitForSelector");
   });
   const move = vi.fn(async (x: number, y: number) => {
     log.push(`move:${x},${y}`);
@@ -48,12 +68,12 @@ function fakeCaptureHarness() {
 
   const page: PatchrightCapturePage = {
     goto,
-    fill: vi.fn(async () => {}),
+    fill,
     click,
     hover,
-    waitForSelector: vi.fn(async () => {}),
+    waitForSelector,
     goBack: vi.fn(async () => {}),
-    url: () => "",
+    url: () => currentUrl,
     title: async () => "",
     $$: async () => [],
     $,
@@ -81,8 +101,10 @@ function fakeCaptureHarness() {
     log,
     launcher,
     goto,
+    fill,
     click,
     hover,
+    waitForSelector,
     move,
     type,
     waitForTimeout,
@@ -94,6 +116,29 @@ function fakeCaptureHarness() {
 }
 
 describe("WebRecordingEngine", () => {
+  const originalEnv = {
+    url: process.env.GUIDEO_TARGET_URL,
+    username: process.env.GUIDEO_TARGET_USERNAME,
+    password: process.env.GUIDEO_TARGET_PASSWORD,
+  };
+
+  beforeEach(() => {
+    process.env.GUIDEO_TARGET_URL = LOGIN_URL;
+    process.env.GUIDEO_TARGET_USERNAME = "alice";
+    process.env.GUIDEO_TARGET_PASSWORD = "s3cret";
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries({
+      GUIDEO_TARGET_URL: originalEnv.url,
+      GUIDEO_TARGET_USERNAME: originalEnv.username,
+      GUIDEO_TARGET_PASSWORD: originalEnv.password,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
   it("drives every storyboard action type in order through humanized mouse/keyboard and returns a RawClip", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({
@@ -191,6 +236,69 @@ describe("WebRecordingEngine", () => {
 
     const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
     await expect(engine.capture(approved)).rejects.toThrow("boom");
+    expect(harness.browserClose).toHaveBeenCalled();
+  });
+
+  // --- Authenticate before capture (reuses discovery's shared login.ts) --------------------
+
+  it("logs in the same way discovery does before running any storyboard step", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "click",
+          selector: 'role=link[name="Manifestaciones"]',
+          narrationSegmentId: "seg-1",
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+    await engine.capture(approved);
+
+    // Login sequence: goto(login url) -> waitForSelector(password) -> fill username -> fill
+    // password -> click submit — all BEFORE the first storyboard step's click.
+    const gotoIndex = harness.log.indexOf(`goto:${LOGIN_URL}`);
+    const waitIndex = harness.log.indexOf("waitForSelector");
+    const fillUsernameIndex = harness.log.indexOf(`fill:${DEFAULT_LOGIN_CONFIG.usernameSelector}`);
+    const fillPasswordIndex = harness.log.indexOf(`fill:${DEFAULT_LOGIN_CONFIG.passwordSelector}`);
+    const submitIndex = harness.log.indexOf(`click:${DEFAULT_LOGIN_CONFIG.submitSelector}`);
+    const storyboardClickIndex = harness.log.indexOf('click:role=link[name="Manifestaciones"]');
+
+    expect(gotoIndex).toBeGreaterThanOrEqual(0);
+    expect(waitIndex).toBeGreaterThan(gotoIndex);
+    expect(fillUsernameIndex).toBeGreaterThan(waitIndex);
+    expect(fillPasswordIndex).toBeGreaterThan(fillUsernameIndex);
+    expect(submitIndex).toBeGreaterThan(fillPasswordIndex);
+    expect(storyboardClickIndex).toBeGreaterThan(submitIndex);
+  });
+
+  it("throws the clear login error and never runs the storyboard when login is stuck/failed", async () => {
+    const harness = fakeCaptureHarness({ staysOnLogin: true });
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "click",
+          selector: 'role=link[name="Manifestaciones"]',
+          narrationSegmentId: "seg-1",
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(
+      harness.launcher,
+      new SeededRandom(1),
+      {},
+      {},
+      FAST_LOGIN_WAIT,
+    );
+
+    await expect(engine.capture(approved)).rejects.toThrow(/Login failed/);
+    expect(harness.click).not.toHaveBeenCalledWith('role=link[name="Manifestaciones"]');
     expect(harness.browserClose).toHaveBeenCalled();
   });
 });

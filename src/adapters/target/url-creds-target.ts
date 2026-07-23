@@ -20,77 +20,26 @@ import {
 } from "../../domain/models/flow-graph.js";
 import type { Target } from "../../domain/ports/target.js";
 import { DEFAULT_DISCOVERY_CONFIG, type DiscoveryConfig } from "./discovery-config.js";
+import type {
+  BrowserLauncher,
+  PatchrightBrowser,
+  PatchrightElementHandle,
+  PatchrightPage,
+  UrlCredsEnv,
+} from "./login.js";
+import { login, normalizeUrl, readTargetEnvOrThrow } from "./login.js";
 
-// Narrow structural subset of patchright's ElementHandle — only what this adapter reads to build
-// a robust selector for a discovered link. A real patchright ElementHandle satisfies this
-// structurally; unit tests can pass a plain fake object literal.
-export interface PatchrightElementHandle {
-  getAttribute(name: string): Promise<string | null>;
-  textContent(): Promise<string | null>;
-}
-
-type WaitUntil = "load" | "domcontentloaded" | "networkidle";
-
-// Narrow structural subset of patchright's Page — only what this adapter calls. `goto`/`goBack`
-// options and `waitForSelector` match real patchright/Playwright signatures structurally, so a
-// real Chromium page satisfies this interface with zero adapter-side shimming.
-export interface PatchrightPage {
-  goto(url: string, options?: { waitUntil?: WaitUntil }): Promise<unknown>;
-  fill(selector: string, value: string): Promise<void>;
-  click(selector: string): Promise<void>;
-  waitForSelector(selector: string, options?: { timeout?: number }): Promise<unknown>;
-  goBack(options?: { waitUntil?: WaitUntil }): Promise<unknown>;
-  url(): string;
-  title(): Promise<string>;
-  $$(selector: string): Promise<PatchrightElementHandle[]>;
-  close(): Promise<void>;
-}
-
-// Narrow structural subset of patchright's Browser.
-export interface PatchrightBrowser {
-  newPage(): Promise<PatchrightPage>;
-  close(): Promise<void>;
-}
-
-export type BrowserLauncher = () => Promise<PatchrightBrowser>;
-
-export interface UrlCredsEnv {
-  readonly url: string;
-  readonly username: string;
-  readonly password: string;
-}
-
-const REQUIRED_ENV_VARS = [
-  ["GUIDEO_TARGET_URL", "url"],
-  ["GUIDEO_TARGET_USERNAME", "username"],
-  ["GUIDEO_TARGET_PASSWORD", "password"],
-] as const;
-
-// Reads target URL/credentials from env. Called only at discover()-time (never at import or
-// construction) so a missing env produces a clear error exactly when discovery is attempted.
-export function readTargetEnvOrThrow(): UrlCredsEnv {
-  const values: Partial<Record<"url" | "username" | "password", string>> = {};
-  const missing: string[] = [];
-  for (const [envVar, key] of REQUIRED_ENV_VARS) {
-    const value = process.env[envVar];
-    if (!value) {
-      missing.push(envVar);
-    } else {
-      values[key] = value;
-    }
-  }
-  if (missing.length > 0) {
-    throw new Error(
-      `UrlCredsTarget.discover() requires env var(s) ${missing.join(", ")}. Load them via ` +
-        "`node --env-file=.env` (or export them) before calling discover().",
-    );
-  }
-  const { url, username, password } = values;
-  if (!url || !username || !password) {
-    throw new Error("UrlCredsTarget.discover(): unexpected missing env value.");
-  }
-  return { url, username, password };
-}
+export type {
+  BrowserLauncher,
+  PatchrightBrowser,
+  PatchrightElementHandle,
+  PatchrightPage,
+  UrlCredsEnv,
+};
+// Re-exported for existing/external consumers (e.g. WebRecordingEngine) that import these
+// structural patchright types and readTargetEnvOrThrow from this module — the canonical
+// definitions now live in ./login.js, shared with capture's login.
+export { readTargetEnvOrThrow };
 
 // Robust-selector priority for a discovered nav item: data-testid > accessible role/name >
 // id > raw href > tag fallback. Prefers stable attributes over brittle positional selectors, per
@@ -121,11 +70,6 @@ export async function buildRobustSelector(link: PatchrightElementHandle): Promis
   return "button";
 }
 
-function normalizeUrl(url: string): string {
-  const parsed = new URL(url);
-  return `${parsed.origin}${parsed.pathname}`;
-}
-
 function isSameOrigin(url: string, baseUrl: string): boolean {
   return new URL(url).origin === new URL(baseUrl).origin;
 }
@@ -143,10 +87,6 @@ function scopeSelectorList(container: string, selectorList: string): string {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-const LOGIN_FAILED_MESSAGE =
-  "Login failed — check GUIDEO_TARGET_USERNAME/PASSWORD; the target reported invalid " +
-  "credentials or never left the login page.";
 
 // ponytail: feature/useCase tagging is a URL/text heuristic (first path segment = feature, page
 // title or link text = useCase) — no NLP/AI classification. Good enough for the thin slice;
@@ -179,64 +119,16 @@ export class UrlCredsTarget implements Target {
 
     try {
       const page = await browser.newPage();
-      await this.login(page, env);
+      // Shared login (see ./login.js): SAME hydration-aware fill + URL-change-first success
+      // detection + real-text-only error detection used by capture (WebRecordingEngine). This
+      // adapter's DiscoveryConfig structurally satisfies LoginConfig (superset of its fields).
+      await login(page, env, this.config);
       const graph = parseFlowGraph(await this.crawl(page, page.url() || env.url));
       await this.persist(graph);
       return graph;
     } finally {
       await browser.close();
     }
-  }
-
-  // Hydration-aware: waits for the login form to actually exist (SPAs render it post-JS-boot,
-  // so filling immediately after goto() would hit an empty DOM) before filling/submitting, then
-  // verifies the login actually succeeded — no silent proceed on bad creds or a stuck SPA.
-  private async login(page: PatchrightPage, env: UrlCredsEnv): Promise<void> {
-    await page.goto(env.url, { waitUntil: this.config.gotoWaitUntil });
-    await page.waitForSelector(this.config.passwordSelector, {
-      timeout: this.config.formWaitTimeoutMs,
-    });
-    // The ACTUAL login URL after any redirect (env.url may be the app root "/" that redirects to
-    // "/login"). Login success is a transition away from THIS url — comparing against env.url would
-    // read the initial redirect as an instant false success (real e2e).
-    const loginUrl = page.url() || env.url;
-    await page.fill(this.config.usernameSelector, env.username);
-    await page.fill(this.config.passwordSelector, env.password);
-    await page.click(this.config.submitSelector);
-    await this.verifyLoginSucceeded(page, loginUrl);
-  }
-
-  // Polls (bounded by loginTimeoutMs) for either an auth-error indicator or a URL change away
-  // from the login route. Throws a clear, actionable error otherwise — never silently proceeds
-  // to crawl on a failed login (see e2e-findings: was a silent-failure bug producing a useless
-  // 2-node graph with exit 0).
-  private async verifyLoginSucceeded(page: PatchrightPage, loginUrl: string): Promise<void> {
-    const normalizedLoginUrl = normalizeUrl(loginUrl);
-    const deadline = Date.now() + this.config.loginTimeoutMs;
-
-    while (true) {
-      // Success takes priority: a URL change away from the login route means we're authenticated.
-      const currentUrl = page.url();
-      if (currentUrl && normalizeUrl(currentUrl) !== normalizedLoginUrl) return;
-
-      // A failure requires a REAL error — an error element carrying actual text. An always-present
-      // empty [role=alert]/aria-live container (common in SPAs) matches the selector but has no
-      // text; treating its mere presence as a failure false-positived logins that had actually
-      // succeeded (see e2e-findings).
-      if (await this.hasRealError(page)) throw new Error(LOGIN_FAILED_MESSAGE);
-
-      if (Date.now() >= deadline) throw new Error(LOGIN_FAILED_MESSAGE);
-      await sleep(this.config.loginPollIntervalMs);
-    }
-  }
-
-  // True only if at least one error-selector match carries non-empty text — guards against
-  // always-present empty alert/aria-live containers that match the selector but signal nothing.
-  private async hasRealError(page: PatchrightPage): Promise<boolean> {
-    for (const el of await page.$$(this.config.loginErrorSelector)) {
-      if ((await el.textContent())?.trim()) return true;
-    }
-    return false;
   }
 
   // Own poll-based waiter (not a native waitForURL) — keeps both login-outcome and nav-click
