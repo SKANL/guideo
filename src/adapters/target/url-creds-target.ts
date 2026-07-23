@@ -29,11 +29,17 @@ export interface PatchrightElementHandle {
   textContent(): Promise<string | null>;
 }
 
-// Narrow structural subset of patchright's Page — only what this adapter calls.
+type WaitUntil = "load" | "domcontentloaded" | "networkidle";
+
+// Narrow structural subset of patchright's Page — only what this adapter calls. `goto`/`goBack`
+// options and `waitForSelector` match real patchright/Playwright signatures structurally, so a
+// real Chromium page satisfies this interface with zero adapter-side shimming.
 export interface PatchrightPage {
-  goto(url: string): Promise<unknown>;
+  goto(url: string, options?: { waitUntil?: WaitUntil }): Promise<unknown>;
   fill(selector: string, value: string): Promise<void>;
   click(selector: string): Promise<void>;
+  waitForSelector(selector: string, options?: { timeout?: number }): Promise<unknown>;
+  goBack(options?: { waitUntil?: WaitUntil }): Promise<unknown>;
   url(): string;
   title(): Promise<string>;
   $$(selector: string): Promise<PatchrightElementHandle[]>;
@@ -86,24 +92,33 @@ export function readTargetEnvOrThrow(): UrlCredsEnv {
   return { url, username, password };
 }
 
-// Robust-selector priority for a discovered link: data-testid > accessible name (role/text) >
-// id > raw href. Prefers stable attributes over brittle positional selectors, per the discovery
-// spec's "robust selectors" requirement — this feeds later capture/replay.
+// Robust-selector priority for a discovered nav item: data-testid > accessible role/name >
+// id > raw href > tag fallback. Prefers stable attributes over brittle positional selectors, per
+// the discovery spec's "robust selectors" requirement — this feeds later capture/replay. Role
+// defaults to "link" for anchors and "button" for everything else (buttons/role items), or uses
+// an explicit `role` attribute when present.
 export async function buildRobustSelector(link: PatchrightElementHandle): Promise<string> {
   const testId = await link.getAttribute("data-testid");
   if (testId) return `[data-testid="${testId}"]`;
 
+  const href = await link.getAttribute("href");
+  const explicitRole = await link.getAttribute("role");
+  const roleName = explicitRole || (href ? "link" : "button");
+
   const ariaLabel = await link.getAttribute("aria-label");
-  if (ariaLabel) return `role=link[name="${ariaLabel}"]`;
+  if (ariaLabel) return `role=${roleName}[name="${ariaLabel}"]`;
 
   const text = (await link.textContent())?.trim();
-  if (text) return `role=link[name="${text}"]`;
+  if (text) return `role=${roleName}[name="${text}"]`;
 
   const id = await link.getAttribute("id");
   if (id) return `#${id}`;
 
-  const href = await link.getAttribute("href");
-  return `a[href="${href ?? ""}"]`;
+  if (href) return `a[href="${href}"]`;
+
+  // ponytail: no identifying attribute found on a non-anchor item — rare given real nav items
+  // normally carry visible text or an aria-label; last-resort tag selector.
+  return "button";
 }
 
 function normalizeUrl(url: string): string {
@@ -114,6 +129,14 @@ function normalizeUrl(url: string): string {
 function isSameOrigin(url: string, baseUrl: string): boolean {
   return new URL(url).origin === new URL(baseUrl).origin;
 }
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const LOGIN_FAILED_MESSAGE =
+  "Login failed — check GUIDEO_TARGET_USERNAME/PASSWORD; the target reported invalid " +
+  "credentials or never left the login page.";
 
 // ponytail: feature/useCase tagging is a URL/text heuristic (first path segment = feature, page
 // title or link text = useCase) — no NLP/AI classification. Good enough for the thin slice;
@@ -155,11 +178,68 @@ export class UrlCredsTarget implements Target {
     }
   }
 
+  // Hydration-aware: waits for the login form to actually exist (SPAs render it post-JS-boot,
+  // so filling immediately after goto() would hit an empty DOM) before filling/submitting, then
+  // verifies the login actually succeeded — no silent proceed on bad creds or a stuck SPA.
   private async login(page: PatchrightPage, env: UrlCredsEnv): Promise<void> {
-    await page.goto(env.url);
+    await page.goto(env.url, { waitUntil: this.config.gotoWaitUntil });
+    await page.waitForSelector(this.config.passwordSelector, {
+      timeout: this.config.formWaitTimeoutMs,
+    });
     await page.fill(this.config.usernameSelector, env.username);
     await page.fill(this.config.passwordSelector, env.password);
     await page.click(this.config.submitSelector);
+    await this.verifyLoginSucceeded(page, env.url);
+  }
+
+  // Polls (bounded by loginTimeoutMs) for either an auth-error indicator or a URL change away
+  // from the login route. Throws a clear, actionable error otherwise — never silently proceeds
+  // to crawl on a failed login (see e2e-findings: was a silent-failure bug producing a useless
+  // 2-node graph with exit 0).
+  private async verifyLoginSucceeded(page: PatchrightPage, loginUrl: string): Promise<void> {
+    const normalizedLoginUrl = normalizeUrl(loginUrl);
+    const deadline = Date.now() + this.config.loginTimeoutMs;
+
+    while (true) {
+      const errorElements = await page.$$(this.config.loginErrorSelector);
+      if (errorElements.length > 0) throw new Error(LOGIN_FAILED_MESSAGE);
+
+      const currentUrl = page.url();
+      if (currentUrl && normalizeUrl(currentUrl) !== normalizedLoginUrl) return;
+
+      if (Date.now() >= deadline) throw new Error(LOGIN_FAILED_MESSAGE);
+      await sleep(this.config.loginPollIntervalMs);
+    }
+  }
+
+  // Own poll-based waiter (not a native waitForURL) — keeps both login-outcome and nav-click
+  // detection testable purely against a fake page's synchronous url() mutation, while still
+  // respecting a real timeout budget against a live browser.
+  private async waitForUrlChange(
+    page: PatchrightPage,
+    beforeUrl: string,
+    timeoutMs: number,
+    intervalMs: number,
+  ): Promise<boolean> {
+    const before = normalizeUrl(beforeUrl);
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const current = page.url();
+      if (current && normalizeUrl(current) !== before) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(intervalMs);
+    }
+  }
+
+  // SPA-aware primary-nav discovery: tries each candidate container selector (nav/aside/etc.) in
+  // order, falling back to the bare item selector (whole document) if none match — covers apps
+  // with no nav wrapper.
+  private async findNavItems(page: PatchrightPage): Promise<PatchrightElementHandle[]> {
+    for (const container of this.config.navContainerSelectors) {
+      const items = await page.$$(`${container} ${this.config.navItemSelector}`);
+      if (items.length > 0) return items;
+    }
+    return page.$$(this.config.navItemSelector);
   }
 
   private async crawl(page: PatchrightPage, startUrl: string): Promise<FlowGraph> {
@@ -179,27 +259,55 @@ export class UrlCredsTarget implements Target {
       if (visited.has(nodeId)) continue;
       visited.add(nodeId);
 
-      if (page.url() !== currentUrl) {
-        await page.goto(currentUrl);
+      if (normalizeUrl(page.url()) !== nodeId) {
+        await page.goto(currentUrl, { waitUntil: this.config.gotoWaitUntil });
       }
 
       const title = await page.title();
-      const links = await page.$$("a[href]");
+      // ponytail: bounded to the primary navigation (nav/aside/role=navigation containers, or a
+      // whole-page interactive-item fallback) up to maxPages total nodes — not an exhaustive
+      // click-everything crawler. Upgrade path: a relevance-ranked frontier or an explicit route
+      // list once discovery needs to cover more than a primary nav's worth of an app.
+      const navItems = await this.findNavItems(page);
       const selectors: Record<string, string> = {};
 
-      for (const link of links) {
-        const href = await link.getAttribute("href");
-        if (!href) continue;
+      for (const item of navItems) {
+        const href = await item.getAttribute("href");
+        const selector = await buildRobustSelector(item);
+        const text = (await item.textContent())?.trim();
+        let targetUrl: string;
 
-        const targetUrl = new URL(href, currentUrl).toString();
-        if (!isSameOrigin(targetUrl, startUrl)) continue;
+        if (href) {
+          // Anchor with a real href — no need to click; the target URL is already known.
+          targetUrl = new URL(href, currentUrl).toString();
+          if (!isSameOrigin(targetUrl, startUrl)) continue;
+        } else {
+          // No href — a button/router-driven nav item (client-side routing). Click it, wait for
+          // the URL to change, record the resulting route, then return to the base page to try
+          // the next item.
+          const before = page.url();
+          await page.click(selector);
+          const navigated = await this.waitForUrlChange(
+            page,
+            before,
+            this.config.navClickTimeoutMs,
+            this.config.navPollIntervalMs,
+          );
+          if (!navigated) continue;
 
-        const selector = await buildRobustSelector(link);
-        const text = (await link.textContent())?.trim();
-        selectors[slugify(text || href)] = selector;
-        edges.push({ from: nodeId, to: normalizeUrl(targetUrl), action: `click ${selector}` });
+          const after = page.url();
+          if (!isSameOrigin(after, startUrl)) {
+            await page.goBack();
+            continue;
+          }
+          targetUrl = after;
+          await page.goBack();
+        }
 
+        selectors[slugify(text || href || targetUrl)] = selector;
         const targetId = normalizeUrl(targetUrl);
+        edges.push({ from: nodeId, to: targetId, action: `click ${selector}` });
+
         if (!visited.has(targetId) && !queued.has(targetId)) {
           queued.add(targetId);
           queue.push(targetUrl);

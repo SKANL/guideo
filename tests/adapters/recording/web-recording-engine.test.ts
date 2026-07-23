@@ -51,6 +51,8 @@ function fakeCaptureHarness() {
     fill: vi.fn(async () => {}),
     click,
     hover,
+    waitForSelector: vi.fn(async () => {}),
+    goBack: vi.fn(async () => {}),
     url: () => "",
     title: async () => "",
     $$: async () => [],

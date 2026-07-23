@@ -20,6 +20,9 @@ const LOGIN_URL = `${BASE_URL}/login`;
 const HOME_URL = `${BASE_URL}/home`;
 const SUBMIT_SELECTOR = 'button[type="submit"]';
 
+// Short timeouts so the RED (login-stays-on-/login) path doesn't slow the suite down.
+const FAST_LOGIN_WAIT = { loginTimeoutMs: 30, loginPollIntervalMs: 5 };
+
 interface FakeLinkSpec {
   href: string;
   text?: string;
@@ -49,8 +52,12 @@ function normalize(url: string): string {
   return `${parsed.origin}${parsed.pathname}`;
 }
 
-// Builds a fake single-page-per-URL "site" driven purely through PatchrightPage calls — no real
-// browser, no network. Clicking SUBMIT_SELECTOR simulates a login redirect to `postLoginUrl`.
+// Builds a fake single-page-per-URL anchor-based "site" driven purely through PatchrightPage
+// calls — no real browser, no network. Clicking SUBMIT_SELECTOR simulates a login redirect to
+// `postLoginUrl`. `$$` emulates a real browser's comma-separated CSS selector list semantics: a
+// query matches if ANY comma-separated part matches (here only the literal "a[href]" part is
+// modeled, since these fixture pages have no nav containers — proving the crawler's
+// container-first-then-bare-fallback nav discovery still finds plain anchors).
 function fakeSite(pages: Record<string, FakePageSpec>, postLoginUrl = HOME_URL) {
   let currentUrl = "";
   const goto = vi.fn(async (url: string) => {
@@ -60,15 +67,20 @@ function fakeSite(pages: Record<string, FakePageSpec>, postLoginUrl = HOME_URL) 
   const click = vi.fn(async (selector: string) => {
     if (selector === SUBMIT_SELECTOR) currentUrl = postLoginUrl;
   });
+  const waitForSelector = vi.fn(async () => {});
+  const goBack = vi.fn(async () => {});
 
   const page: PatchrightPage = {
     goto,
     fill,
     click,
+    waitForSelector,
+    goBack,
     url: () => currentUrl,
     title: async () => pages[normalize(currentUrl)]?.title ?? "",
     $$: async (selector: string) => {
-      if (selector !== "a[href]") return [];
+      const parts = selector.split(",").map((part) => part.trim());
+      if (!parts.includes("a[href]")) return [];
       return (pages[normalize(currentUrl)]?.links ?? []).map(fakeLink);
     },
     close: async () => {},
@@ -81,7 +93,116 @@ function fakeSite(pages: Record<string, FakePageSpec>, postLoginUrl = HOME_URL) 
 
   const launcher: BrowserLauncher = vi.fn(async () => browser);
 
-  return { page, browser, launcher, goto, fill, click };
+  return { page, browser, launcher, goto, fill, click, waitForSelector, goBack };
+}
+
+// Fake site that never leaves LOGIN_URL after the submit click (bad creds / SPA that stays put),
+// optionally exposing an auth-error banner element matched by `errorSelector`.
+function fakeStuckLoginSite(options: { showErrorBanner?: boolean; errorSelector?: string } = {}) {
+  let currentUrl = "";
+  const goto = vi.fn(async (url: string) => {
+    currentUrl = url;
+  });
+  const fill = vi.fn(async () => {});
+  const click = vi.fn(async () => {
+    // stays on the login page regardless of submit — simulates invalid creds
+  });
+  const waitForSelector = vi.fn(async () => {});
+  const goBack = vi.fn(async () => {});
+
+  const page: PatchrightPage = {
+    goto,
+    fill,
+    click,
+    waitForSelector,
+    goBack,
+    url: () => currentUrl,
+    title: async () => "Login",
+    $$: async (selector: string) => {
+      if (options.showErrorBanner && selector === options.errorSelector) {
+        return [fakeLink({ href: "", text: "Invalid login credentials" })];
+      }
+      return [];
+    },
+    close: async () => {},
+  };
+
+  const browser: PatchrightBrowser = {
+    newPage: async () => page,
+    close: vi.fn(async () => {}),
+  };
+
+  const launcher: BrowserLauncher = vi.fn(async () => browser);
+  return { launcher };
+}
+
+// A single-page SPA "home" whose primary nav is BUTTONS (no <a href> anywhere) identified by
+// data-testid, matching a `[data-nav-btn]`-style item selector (config-overridden by the test so
+// the fake doesn't need to guess the real default selector string). Clicking a nav button updates
+// the URL synchronously (client-side router), proving anchor-only discovery is gone.
+function fakeSpaButtonNavSite() {
+  const REPORTS_URL = `${BASE_URL}/reports`;
+  const SETTINGS_URL = `${BASE_URL}/settings`;
+  const titles: Record<string, string> = {
+    [normalize(HOME_URL)]: "Home",
+    [normalize(REPORTS_URL)]: "Reports",
+    [normalize(SETTINGS_URL)]: "Settings",
+  };
+  const navButtons = [
+    { testid: "nav-reports", text: "Reports", targetUrl: REPORTS_URL },
+    { testid: "nav-settings", text: "Settings", targetUrl: SETTINGS_URL },
+  ];
+
+  let currentUrl = "";
+  let previousUrl = "";
+  const goto = vi.fn(async (url: string) => {
+    previousUrl = currentUrl;
+    currentUrl = url;
+  });
+  const fill = vi.fn(async () => {});
+  const click = vi.fn(async (selector: string) => {
+    if (selector === SUBMIT_SELECTOR) {
+      previousUrl = currentUrl;
+      currentUrl = HOME_URL;
+      return;
+    }
+    const nav = navButtons.find((b) => selector === `[data-testid="${b.testid}"]`);
+    if (nav) {
+      previousUrl = currentUrl;
+      currentUrl = nav.targetUrl;
+    }
+  });
+  const waitForSelector = vi.fn(async () => {});
+  const goBack = vi.fn(async () => {
+    currentUrl = previousUrl;
+  });
+
+  const page: PatchrightPage = {
+    goto,
+    fill,
+    click,
+    waitForSelector,
+    goBack,
+    url: () => currentUrl,
+    title: async () => titles[normalize(currentUrl)] ?? "",
+    $$: async (selector: string) => {
+      // Only the bare fallback item selector resolves (no "nav" container in this fixture) —
+      // proving container-first-then-fallback nav discovery works with a fully custom selector.
+      if (selector === "[data-nav-btn]" && normalize(currentUrl) === normalize(HOME_URL)) {
+        return navButtons.map((b) => fakeLink({ href: "", text: b.text, testid: b.testid }));
+      }
+      return [];
+    },
+    close: async () => {},
+  };
+
+  const browser: PatchrightBrowser = {
+    newPage: async () => page,
+    close: vi.fn(async () => {}),
+  };
+
+  const launcher: BrowserLauncher = vi.fn(async () => browser);
+  return { launcher, REPORTS_URL, SETTINGS_URL };
 }
 
 describe("UrlCredsTarget", () => {
@@ -121,7 +242,7 @@ describe("UrlCredsTarget", () => {
 
     const graph = await target.discover();
 
-    expect(goto).toHaveBeenCalledWith(LOGIN_URL);
+    expect(goto).toHaveBeenCalledWith(LOGIN_URL, { waitUntil: "networkidle" });
     expect(fill).toHaveBeenCalledWith(expect.stringContaining("username"), "alice");
     expect(fill).toHaveBeenCalledWith(expect.stringContaining("password"), "s3cret");
     expect(click).toHaveBeenCalledWith(SUBMIT_SELECTOR);
@@ -200,6 +321,114 @@ describe("UrlCredsTarget", () => {
 
     await rm(outputPath, { force: true });
   });
+
+  // --- Defect 1: silent login failure -------------------------------------------------------
+
+  it("throws a clear, actionable error when the page never leaves the login route after submit", async () => {
+    const { launcher } = fakeStuckLoginSite();
+    const target = new UrlCredsTarget(launcher, FAST_LOGIN_WAIT);
+
+    await expect(target.discover()).rejects.toThrow(
+      /Login failed.*GUIDEO_TARGET_USERNAME\/PASSWORD/,
+    );
+  });
+
+  it("throws the clear login-failed error when an auth-error banner is present", async () => {
+    const errorSelector =
+      '[role="alert"], [data-testid="auth-error"], .error, .alert-error, [class*="error"]';
+    const { launcher } = fakeStuckLoginSite({ showErrorBanner: true, errorSelector });
+    const target = new UrlCredsTarget(launcher, {
+      ...FAST_LOGIN_WAIT,
+      loginErrorSelector: errorSelector,
+    });
+
+    await expect(target.discover()).rejects.toThrow(/Login failed/);
+  });
+
+  it("does not throw when the page transitions to an authenticated route after submit", async () => {
+    const { launcher } = fakeSite({
+      [normalize(HOME_URL)]: { title: "Home", links: [] },
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-authok-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, { outputPath, ...FAST_LOGIN_WAIT });
+
+    await expect(target.discover()).resolves.not.toThrow();
+
+    await rm(outputPath, { force: true });
+  });
+
+  // --- Defect 2: hydration-aware login + SPA-aware nav discovery ---------------------------
+
+  it("waits for the login form (password field) before filling it — hydration-aware login", async () => {
+    const callOrder: string[] = [];
+    let currentUrl = "";
+    const page: PatchrightPage = {
+      goto: async (url) => {
+        currentUrl = url;
+        callOrder.push("goto");
+      },
+      waitForSelector: async () => {
+        callOrder.push("waitForSelector");
+      },
+      fill: async (selector) => {
+        callOrder.push(`fill:${selector}`);
+      },
+      click: async (selector) => {
+        if (selector === SUBMIT_SELECTOR) currentUrl = HOME_URL;
+        callOrder.push(`click:${selector}`);
+      },
+      goBack: async () => {},
+      url: () => currentUrl,
+      title: async () => "Home",
+      $$: async () => [],
+      close: async () => {},
+    };
+    const browser: PatchrightBrowser = { newPage: async () => page, close: async () => {} };
+    const launcher: BrowserLauncher = async () => browser;
+    const outputPath = join(tmpdir(), `guideo-flowgraph-hydration-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, { outputPath });
+
+    await target.discover();
+
+    const waitIndex = callOrder.indexOf("waitForSelector");
+    const firstFillIndex = callOrder.findIndex((entry) => entry.startsWith("fill:"));
+    expect(waitIndex).toBeGreaterThanOrEqual(0);
+    expect(firstFillIndex).toBeGreaterThan(waitIndex);
+
+    await rm(outputPath, { force: true });
+  });
+
+  it("discovers SPA routes reachable only via clickable nav buttons (no <a href> anywhere)", async () => {
+    const { launcher, REPORTS_URL, SETTINGS_URL } = fakeSpaButtonNavSite();
+    const outputPath = join(tmpdir(), `guideo-flowgraph-spa-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      maxPages: 10,
+      navContainerSelectors: ["nav"],
+      navItemSelector: "[data-nav-btn]",
+      ...FAST_LOGIN_WAIT,
+    });
+
+    const graph = await target.discover();
+
+    expect(FlowGraphSchema.safeParse(graph).success).toBe(true);
+    expect(graph.nodes.length).toBeGreaterThanOrEqual(3);
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(HOME_URL));
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(REPORTS_URL));
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(SETTINGS_URL));
+    expect(graph.edges).toContainEqual({
+      from: normalize(HOME_URL),
+      to: normalize(REPORTS_URL),
+      action: expect.stringContaining("click"),
+    });
+    expect(graph.edges).toContainEqual({
+      from: normalize(HOME_URL),
+      to: normalize(SETTINGS_URL),
+      action: expect.stringContaining("click"),
+    });
+
+    await rm(outputPath, { force: true });
+  });
 });
 
 describe("buildRobustSelector", () => {
@@ -210,9 +439,14 @@ describe("buildRobustSelector", () => {
     expect(selector).toBe('[data-testid="nav-dashboard"]');
   });
 
-  it("falls back to an accessible text/role selector when no testid is present", async () => {
+  it("falls back to an accessible link-role selector when no testid is present and href exists", async () => {
     const selector = await buildRobustSelector(fakeLink({ href: "/x", text: "Dashboard" }));
     expect(selector).toBe('role=link[name="Dashboard"]');
+  });
+
+  it("falls back to an accessible button-role selector for a non-anchor item with no href", async () => {
+    const selector = await buildRobustSelector(fakeLink({ href: "", text: "Reports" }));
+    expect(selector).toBe('role=button[name="Reports"]');
   });
 
   it("falls back to the raw href as a last resort", async () => {
