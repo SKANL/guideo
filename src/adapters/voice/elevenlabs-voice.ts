@@ -83,16 +83,11 @@ export class ElevenLabsVoice implements VoiceGen {
 
   async synthesize(segment: NarrationSegment): Promise<Audio> {
     const client = this.injectedClient ?? this.getOrCreateDefaultClient();
-    const {
-      voiceId,
-      modelId,
-      outputFormat,
-      stability,
-      similarityBoost,
-      style,
-      useSpeakerBoost,
-      speed,
-    } = this.calibration;
+    const { modelId, outputFormat, stability, similarityBoost, style, useSpeakerBoost, speed } =
+      this.calibration;
+    // Per-account voice override — free ElevenLabs accounts differ in which voices they may use via
+    // API, so let the environment pick one without a code/calibration change.
+    const voiceId = process.env.GUIDEO_VOICE_ID || this.calibration.voiceId;
 
     let stream: ReadableStream<Uint8Array>;
     try {

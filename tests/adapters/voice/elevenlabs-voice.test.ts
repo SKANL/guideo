@@ -39,6 +39,17 @@ describe("ElevenLabsVoice", () => {
     } else {
       process.env.ELEVENLABS_API_KEY = originalKey;
     }
+    delete process.env.GUIDEO_VOICE_ID;
+  });
+
+  it("lets GUIDEO_VOICE_ID env override the configured voice (per-account free-tier voice access)", async () => {
+    process.env.GUIDEO_VOICE_ID = "env-voice-id";
+    const convert = vi.fn(async () => bytesToStream(new Uint8Array(0)));
+    const voice = new ElevenLabsVoice(fakeClient(convert), { voiceId: "calibration-voice" });
+
+    await voice.synthesize(segment);
+
+    expect(convert).toHaveBeenCalledWith("env-voice-id", expect.anything());
   });
 
   it("maps a script segment to a synthesis call and assembles the Audio result", async () => {

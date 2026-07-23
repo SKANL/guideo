@@ -17,7 +17,11 @@ export interface VoiceCalibration {
 }
 
 export const DEFAULT_VOICE_CALIBRATION: VoiceCalibration = {
-  voiceId: "21m00Tcm4TlvDq8ikWAM", // ElevenLabs' stock "Rachel" voice — a safe generic default.
+  // ElevenLabs' current default "Sarah" voice — verified usable on the FREE tier via API and
+  // multilingual (works for Spanish). The classic "Rachel"/"Aria" IDs are now library voices that
+  // free accounts cannot use via API (402 paid_plan_required). Override per-account with the
+  // GUIDEO_VOICE_ID env var (see ElevenLabsVoice) or the constructor calibration.
+  voiceId: "EXAVITQu4vr4xnSDxMaL",
   modelId: "eleven_multilingual_v2",
   outputFormat: "mp3_44100_128",
   stability: 0.5,
