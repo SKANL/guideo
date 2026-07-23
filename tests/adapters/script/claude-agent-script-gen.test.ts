@@ -55,6 +55,20 @@ function fakeQueryFn(
 }
 
 describe("ClaudeAgentScriptGen", () => {
+  // Regression (real e2e): the claude CLI's --json-schema validator rejects a draft-2020-12 meta
+  // `$schema` ref ("no schema with key or ref .../draft/2020-12/schema"). The schema handed to the
+  // SDK must carry no such meta reference.
+  it("hands the SDK a JSON schema with no draft-meta $schema reference", async () => {
+    const { fn, calls } = fakeQueryFn(validOutput);
+    const scriptGen = new ClaudeAgentScriptGen(fn);
+
+    await scriptGen.generate(brief, routes);
+
+    const schema = calls[0]?.options?.outputFormat?.schema ?? {};
+    expect("$schema" in schema).toBe(false);
+    expect(JSON.stringify(schema)).not.toContain("json-schema.org/draft/2020-12");
+  });
+
   it("builds a prompt containing the brief + route subset and returns validated script + storyboard", async () => {
     const { fn, calls } = fakeQueryFn(validOutput);
     const scriptGen = new ClaudeAgentScriptGen(fn);

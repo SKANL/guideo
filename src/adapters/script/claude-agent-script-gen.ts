@@ -24,7 +24,17 @@ import type { FlowGraphRoutes, ScriptGen } from "../../domain/ports/script-gen.j
 import { CONVERSATIONAL_NO_AI_TELLS_PROMPT } from "./calibration-prompt.js";
 
 const OutputSchema = z.object({ script: ScriptSchema, storyboard: StoryboardSchema });
-const OUTPUT_JSON_SCHEMA: Record<string, unknown> = z.toJSONSchema(OutputSchema);
+
+// The claude CLI's `--json-schema` validator can't resolve zod 4's default draft-2020-12 meta
+// `$schema` URL ("no schema with key or ref .../draft/2020-12/schema"). Emit draft-7 (widely
+// supported) and strip the `$schema` meta reference so the CLI validates against its own default.
+function toClaudeJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  const json = z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
+  delete json.$schema;
+  return json;
+}
+
+const OUTPUT_JSON_SCHEMA: Record<string, unknown> = toClaudeJsonSchema(OutputSchema);
 
 // Narrow structural subset of the Claude Agent SDK's query()/SDKMessage surface — only the fields
 // this adapter reads off the terminal `type: "result"` message. The real SDK's `query` function
