@@ -103,6 +103,45 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     expect(subtitles).toEqual([{ text: "Let's invite a teammate.", startMs: 0, durationMs: 1500 }]);
   });
 
+  // Regression (real e2e): ElevenLabs free tier allows only 2 concurrent requests; fanning out
+  // every segment at once hit a 429. Voice synthesis must be serialized (never overlapping).
+  it("synthesizes voice segments sequentially, never overlapping calls", async () => {
+    const engine = new FakeRecordingEngine();
+    const profile = new FakePlatformProfile();
+    const script = parseScript({
+      segments: [
+        { id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } },
+        { id: "s2", text: "Two.", timing: { startMs: 1000, durationMs: 1000 } },
+        { id: "s3", text: "Three.", timing: { startMs: 2000, durationMs: 1000 } },
+      ],
+    });
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "pause", narrationSegmentId: "s1" },
+        { action: "pause", narrationSegmentId: "s2" },
+        { action: "pause", narrationSegmentId: "s3" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+
+    await render(approved, script, engine, voice, profile);
+
+    expect(maxInFlight).toBe(1);
+  });
+
   it("never calls capture/synthesize when the storyboard is rejected", () => {
     const engine = new FakeRecordingEngine();
     const voice = new FakeVoiceGen();
