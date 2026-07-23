@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,7 +13,6 @@ import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
-import type { Target } from "../../../src/domain/ports/target.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
 
 const graph = parseFlowGraph({
@@ -23,10 +22,10 @@ const graph = parseFlowGraph({
   edges: [],
 });
 
-class FakeTarget implements Target {
-  async discover() {
-    return graph;
-  }
+// Simulates a prior `guideo discover` by persisting the flow graph where runPlan reads it.
+async function writeGraph(paths: ReturnType<typeof defaultPaths>): Promise<void> {
+  await mkdir(paths.guideoDir, { recursive: true });
+  await writeFile(paths.flowGraphPath, JSON.stringify(graph, null, 2), "utf8");
 }
 
 class FakeScriptGen implements ScriptGen {
@@ -87,14 +86,14 @@ describe("runPlan", () => {
   it("produces and persists script.json + storyboard.json without touching capture/voice/compose (the REVIEW-gate hard stop)", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
     const paths = defaultPaths(scratchDir);
-    const target = new FakeTarget();
+    await writeGraph(paths);
     const scriptGen = new FakeScriptGen();
     const engine = new FakeRecordingEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
 
-    const result = await runPlan({ target, scriptGen }, brief, paths);
+    const result = await runPlan({ scriptGen }, brief, paths);
 
     expect(result.script.segments[0]?.text).toBe("Let's invite a teammate.");
     expect(result.storyboard.steps[0]?.narrationSegmentId).toBe("seg-1");
@@ -111,10 +110,10 @@ describe("runPlan", () => {
     expect(profile.composeCalls).toBe(0);
   });
 
-  it("re-queries the target for a different brief and overwrites the previously planned files", async () => {
+  it("re-plans for a different brief and overwrites the previously planned files", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
     const paths = defaultPaths(scratchDir);
-    const target = new FakeTarget();
+    await writeGraph(paths);
     const scriptGen = new FakeScriptGen();
     const briefOne = parseBrief({
       idea: "Show how to invite a teammate",
@@ -125,10 +124,19 @@ describe("runPlan", () => {
       targetPlatform: "tiktok",
     });
 
-    await runPlan({ target, scriptGen }, briefOne, paths);
-    const second = await runPlan({ target, scriptGen }, briefTwo, paths);
+    await runPlan({ scriptGen }, briefOne, paths);
+    const second = await runPlan({ scriptGen }, briefTwo, paths);
 
     const writtenScript = JSON.parse(await readFile(paths.scriptPath, "utf8"));
     expect(writtenScript).toEqual(second.script);
+  });
+
+  it("fails with a clear 'run discover first' error when no flow graph is on disk", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
+    const paths = defaultPaths(scratchDir);
+    const scriptGen = new FakeScriptGen();
+    const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
+
+    await expect(runPlan({ scriptGen }, brief, paths)).rejects.toThrow(/guideo discover/);
   });
 });

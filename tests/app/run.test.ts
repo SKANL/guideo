@@ -173,6 +173,7 @@ describe("runCli", () => {
     const paths = defaultPaths(scratchDir);
     const { container, engine, voice, profile } = makeContainer();
     const sink = makeSink();
+    await runCli(["discover"], container, paths, sink.print, sink.printErr);
 
     const code = await runCli(
       ["plan", "--brief", "Show how to invite a teammate", "--platform", "youtube"],
@@ -196,6 +197,7 @@ describe("runCli", () => {
     const paths = defaultPaths(scratchDir);
     const { container, engine, voice, profile } = makeContainer();
     const sink = makeSink();
+    await runCli(["discover"], container, paths, sink.print, sink.printErr);
     await runCli(
       ["plan", "--brief", "Show how to invite a teammate"],
       container,
@@ -218,6 +220,7 @@ describe("runCli", () => {
     const paths = defaultPaths(scratchDir);
     const { container, engine, voice, profile } = makeContainer();
     const sink = makeSink();
+    await runCli(["discover"], container, paths, sink.print, sink.printErr);
     await runCli(
       ["plan", "--brief", "Show how to invite a teammate"],
       container,
