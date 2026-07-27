@@ -23,6 +23,13 @@ export interface DiscoveryConfig extends LoginConfig {
   // concluding it wasn't a navigation control (e.g. a toggle/dropdown) and skipping it.
   readonly navClickTimeoutMs: number;
   readonly navPollIntervalMs: number;
+  // Bounded retry budget for the per-page nav-item query when it throws an
+  // "Execution context was destroyed" (or similar navigation-race) error — a client-rendered SPA
+  // can trigger a late redirect right after goto() settles, destroying the handle the very next
+  // `page.$$` call reads from. Each retry re-settles the page (re-goto its current URL) before
+  // querying again. 0 disables retrying (fails/skips immediately, same as pre-fix behavior).
+  readonly navQueryRetries: number;
+  readonly navQueryRetryWaitMs: number;
 }
 
 export const DEFAULT_DISCOVERY_CONFIG: DiscoveryConfig = {
@@ -33,4 +40,6 @@ export const DEFAULT_DISCOVERY_CONFIG: DiscoveryConfig = {
   navItemSelector: "a[href], button, [role='link'], [role='menuitem'], [role='tab']",
   navClickTimeoutMs: 3_000,
   navPollIntervalMs: 200,
+  navQueryRetries: 2,
+  navQueryRetryWaitMs: 300,
 };

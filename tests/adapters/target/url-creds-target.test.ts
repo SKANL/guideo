@@ -483,6 +483,83 @@ describe("UrlCredsTarget", () => {
     await rm(outputPath, { force: true });
   });
 
+  // --- Self-healing discovery: retry nav queries on execution-context-destroyed races -------
+  // (v2 sub-project 1 — see docs/superpowers/specs/2026-07-27-guideo-v2-timeline-effects-design.md
+  // section E). Real e2e: a client-rendered SPA can trigger a late redirect right after goto()
+  // settles, destroying the execution context the very next `page.$$` call reads from —
+  // intermittent (failed once, succeeded on retry, live).
+
+  it("retries the nav-item query once after an 'Execution context was destroyed' race, then completes discovery", async () => {
+    const { launcher, page } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [{ href: "/settings", text: "Settings" }],
+      },
+      [normalize(`${BASE_URL}/settings`)]: { title: "Settings", links: [] },
+    });
+    const realQuery = page.$$;
+    let thrown = false;
+    page.$$ = vi.fn(async (selector: string) => {
+      if (!thrown) {
+        thrown = true;
+        throw new Error("Execution context was destroyed, most likely because of a navigation.");
+      }
+      return realQuery(selector);
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-retry-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      maxPages: 10,
+      navQueryRetries: 2,
+      navQueryRetryWaitMs: 1,
+    });
+
+    const graph = await target.discover();
+
+    expect(FlowGraphSchema.safeParse(graph).success).toBe(true);
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(HOME_URL));
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(`${BASE_URL}/settings`));
+    expect(graph.edges).toContainEqual({
+      from: normalize(HOME_URL),
+      to: normalize(`${BASE_URL}/settings`),
+      action: expect.stringContaining("click"),
+    });
+
+    await rm(outputPath, { force: true });
+  });
+
+  it("bounds retries and gives up cleanly (no infinite loop) when nav queries always throw the context-destroyed error", async () => {
+    const { launcher, page } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [{ href: "/settings", text: "Settings" }],
+      },
+    });
+    let callCount = 0;
+    page.$$ = vi.fn(async () => {
+      callCount++;
+      throw new Error("Execution context was destroyed, most likely because of a navigation.");
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-retry-exhausted-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      maxPages: 10,
+      navQueryRetries: 2,
+      navQueryRetryWaitMs: 1,
+    });
+
+    const graph = await target.discover();
+
+    expect(FlowGraphSchema.safeParse(graph).success).toBe(true);
+    expect(graph.nodes.map((n) => n.id)).toContain(normalize(HOME_URL));
+    expect(graph.edges).toHaveLength(0);
+    // Exactly navQueryRetries + 1 attempts (1 initial + 2 retries) — proves the budget is bounded,
+    // not an infinite loop.
+    expect(callCount).toBe(3);
+
+    await rm(outputPath, { force: true });
+  });
+
   // --- Defect 2: hydration-aware login + SPA-aware nav discovery ---------------------------
 
   it("waits for the login form (password field) before filling it — hydration-aware login", async () => {

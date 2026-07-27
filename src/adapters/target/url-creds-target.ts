@@ -84,6 +84,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Matches patchright/Playwright's error for the exact race this retries: a client-rendered SPA
+// triggers a late navigation/redirect right after goto() settles, destroying the execution
+// context the very next DOM query reads from. Intermittent — confirmed live (failed once,
+// succeeded on retry).
+const EXECUTION_CONTEXT_DESTROYED_RE = /execution context was destroyed|navigation/i;
+
+function isExecutionContextDestroyedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return EXECUTION_CONTEXT_DESTROYED_RE.test(message);
+}
+
 // ponytail: feature/useCase tagging is a URL/text heuristic (first path segment = feature, page
 // title or link text = useCase) — no NLP/AI classification. Good enough for the thin slice;
 // AI-assisted tagging (e.g. via an LLM) is a later upgrade, deliberately not pulled in here.
@@ -170,6 +181,43 @@ export class UrlCredsTarget implements Target {
     return page.$$(this.config.navItemSelector);
   }
 
+  // Wraps findNavItems() with a bounded retry against the "Execution context was destroyed"
+  // navigation race (see EXECUTION_CONTEXT_DESTROYED_RE): a late SPA redirect right after crawl's
+  // goto() can invalidate the page's execution context before the $$ queries inside findNavItems
+  // run. Each retry re-settles the page (re-goto its current URL, respecting gotoWaitUntil) before
+  // querying again, so a subsequent attempt reads a fresh, stable context. Any other error is not
+  // this race — it propagates immediately, unretried. Budget exhausted: this page's nav items are
+  // skipped (treated as none found) rather than failing the whole crawl over one flaky page — the
+  // page node itself is still recorded, just without outgoing edges.
+  private async findNavItemsWithRetry(
+    page: PatchrightPage,
+    currentUrl: string,
+  ): Promise<PatchrightElementHandle[]> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.config.navQueryRetries; attempt++) {
+      try {
+        return await this.findNavItems(page);
+      } catch (err) {
+        if (!isExecutionContextDestroyedError(err)) throw err;
+        lastError = err;
+        if (attempt >= this.config.navQueryRetries) break;
+        await sleep(this.config.navQueryRetryWaitMs);
+        try {
+          await page.goto(page.url() || currentUrl, { waitUntil: this.config.gotoWaitUntil });
+        } catch {
+          // Settling failed too — retry the query anyway; if the page is truly gone it will throw
+          // again and the budget above will still bound the attempts.
+        }
+      }
+    }
+    const reason = lastError instanceof Error ? lastError.message : String(lastError);
+    console.warn(
+      `UrlCredsTarget: giving up on nav-item discovery for ${currentUrl} after ` +
+        `${this.config.navQueryRetries + 1} attempt(s) — ${reason}`,
+    );
+    return [];
+  }
+
   private async crawl(page: PatchrightPage, startUrl: string): Promise<FlowGraph> {
     const nodes: FlowGraphNode[] = [];
     const edges: FlowGraphEdge[] = [];
@@ -196,7 +244,7 @@ export class UrlCredsTarget implements Target {
       // whole-page interactive-item fallback) up to maxPages total nodes — not an exhaustive
       // click-everything crawler. Upgrade path: a relevance-ranked frontier or an explicit route
       // list once discovery needs to cover more than a primary nav's worth of an app.
-      const navItems = await this.findNavItems(page);
+      const navItems = await this.findNavItemsWithRetry(page, currentUrl);
       const selectors: Record<string, string> = {};
 
       for (const item of navItems) {
