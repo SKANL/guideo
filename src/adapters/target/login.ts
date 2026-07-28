@@ -197,8 +197,17 @@ async function verifyLoginSucceeded(
 // True only if at least one error-selector match carries non-empty text — guards against
 // always-present empty alert/aria-live containers that match the selector but signal nothing.
 async function hasRealError(page: PatchrightPage, config: LoginConfig): Promise<boolean> {
-  for (const el of await page.$$(config.loginErrorSelector)) {
-    if ((await el.textContent())?.trim()) return true;
+  try {
+    for (const el of await page.$$(config.loginErrorSelector)) {
+      if ((await el.textContent())?.trim()) return true;
+    }
+  } catch (err) {
+    // This runs in verifyLoginSucceeded's poll loop right after submit, while the page may be
+    // NAVIGATING to the post-login route — patchright then throws "Execution context was destroyed"
+    // from `$$`/textContent. That destruction IS the success signal (the page left the login page);
+    // swallow it and return "no error" so the URL-change check confirms success on the next poll.
+    // Intermittent real-e2e finding: this unwrapped `$$` occasionally crashed a whole render.
+    if (!isExecutionContextDestroyedError(err)) throw err;
   }
   return false;
 }

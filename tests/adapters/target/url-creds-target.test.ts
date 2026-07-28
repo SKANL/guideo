@@ -429,6 +429,44 @@ describe("UrlCredsTarget", () => {
     await rm(outputPath, { force: true });
   });
 
+  // Regression (real e2e): the login error-check `$$` runs in the post-submit poll loop WHILE the
+  // page navigates to the dashboard — patchright throws "Execution context was destroyed" from it.
+  // That destruction IS the success signal; it must not crash the whole render (it intermittently
+  // did). Login must still succeed via the URL-change check.
+  it("does not crash login when the error-check $$ races a post-submit navigation", async () => {
+    let currentUrl = "";
+    const page: PatchrightPage = {
+      goto: async (url) => {
+        currentUrl = url;
+      },
+      waitForSelector: async () => {},
+      fill: async () => {},
+      click: async () => {}, // async login: submit does NOT synchronously change the URL
+      goBack: async () => {},
+      url: () => currentUrl,
+      title: async () => "Home",
+      // The post-login navigation destroys the context mid-query AND changes the URL.
+      $$: async () => {
+        currentUrl = HOME_URL;
+        throw new Error("Execution context was destroyed, most likely because of a navigation.");
+      },
+      close: async () => {},
+    };
+    const browser: PatchrightBrowser = { newPage: async () => page, close: async () => {} };
+    const launcher: BrowserLauncher = async () => browser;
+    const outputPath = join(tmpdir(), `guideo-flowgraph-ctxrace-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      ...FAST_LOGIN_WAIT,
+      navQueryRetries: 1,
+      navQueryRetryWaitMs: 1,
+    });
+
+    await expect(target.discover()).resolves.not.toThrow();
+
+    await rm(outputPath, { force: true });
+  });
+
   // Regression (real e2e): a nav container with real anchors must be used via the anchor fast
   // path — NOT mixed with unscoped page buttons (the old `${container} ${listSelector}` only
   // scoped the first comma-alternative, leaking every page button into nav discovery and burning
