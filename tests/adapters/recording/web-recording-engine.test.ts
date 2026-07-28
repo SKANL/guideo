@@ -210,6 +210,33 @@ describe("WebRecordingEngine", () => {
     });
   });
 
+  it("waits contentSettleMs after a navigate so the scene doesn't open on a loading skeleton", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "navigate",
+          params: { url: "https://example.com/dashboard" },
+          narrationSegmentId: "seg-1",
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(
+      harness.launcher,
+      new SeededRandom(1),
+      {},
+      {
+        contentSettleMs: 777,
+      },
+    );
+    await engine.capture(approved);
+
+    expect(harness.waitForTimeout).toHaveBeenCalledWith(777);
+  });
+
   it("drives every storyboard action type in order through humanized mouse/keyboard and returns a RawClip", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({

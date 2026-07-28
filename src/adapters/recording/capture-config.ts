@@ -21,6 +21,12 @@ export interface CaptureConfig {
   // How goto() waits for a "navigate" step to settle — client-rendered SPAs need "networkidle" (or
   // at least "load"); "domcontentloaded" fires before hydration.
   readonly navigateWaitUntil: WaitUntil;
+  // After a navigation (a "navigate" step, or a click that changed the URL), wait this long for the
+  // client-rendered SPA to actually RENDER its content before pacing the scene — otherwise the
+  // scene's first frames show a loading skeleton (real e2e: `load` fires before the SPA paints, and
+  // we can't use `networkidle` because a persistent chat/websocket never idles). Counts toward the
+  // scene's elapsed time. 0 disables it.
+  readonly contentSettleMs: number;
   // Narration-driven timing (scene pacing): a scene (consecutive steps sharing a
   // narrationSegmentId) is padded with an extra waitForTimeout to fill its target duration, but
   // never below this floor even if the target itself is smaller.
@@ -55,6 +61,7 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   // idle, so `networkidle` times out the navigation at 30s (real e2e). Per-step verification +
   // self-heal (web-recording-engine) handle any not-yet-hydrated content after load.
   navigateWaitUntil: "load",
+  contentSettleMs: 1_000,
   minSceneMs: 800,
   timingSlackMs: 250,
   stepRetries: 2,

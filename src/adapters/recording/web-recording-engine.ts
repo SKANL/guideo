@@ -343,13 +343,17 @@ export class WebRecordingEngine implements RecordingEngine {
         // current (post-login) page URL to an absolute URL before navigating (real e2e).
         const url = resolveNavigateUrl(raw, page.url());
         await this.navigateWithVerification(page, url);
-        return { mousePosition, elapsedMs: 0 };
+        const settleMs = await this.settleContent(page);
+        return { mousePosition, elapsedMs: settleMs };
       }
       case "click": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
+        const beforeUrl = page.url();
         await this.performClick(page, requireSelector(step));
-        return { mousePosition: target, elapsedMs: moveMs };
+        // A nav click changed the page — wait for the destination content to paint before pacing.
+        const settleMs = page.url() !== beforeUrl ? await this.settleContent(page) : 0;
+        return { mousePosition: target, elapsedMs: moveMs + settleMs };
       }
       case "hover": {
         const target = await this.resolveCenter(page, step);
@@ -506,6 +510,15 @@ export class WebRecordingEngine implements RecordingEngine {
       `WebRecordingEngine: click on "${selector}" did not navigate — falling back to goto("${absoluteUrl}").`,
     );
     await page.goto(absoluteUrl, { waitUntil: this.config.navigateWaitUntil });
+  }
+
+  // Wait for the SPA to PAINT its content after a navigation (see capture-config contentSettleMs)
+  // so a scene doesn't open on a loading skeleton — `load` fires before the SPA renders and
+  // `networkidle` never comes (persistent chat/websocket). Returns the ms waited (scene-time).
+  private async settleContent(page: PatchrightCapturePage): Promise<number> {
+    if (this.config.contentSettleMs <= 0) return 0;
+    await page.waitForTimeout(this.config.contentSettleMs);
+    return this.config.contentSettleMs;
   }
 
   private async moveMouse(page: PatchrightCapturePage, from: Point, to: Point): Promise<number> {
