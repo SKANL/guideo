@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
-import { applyDirectorDefaults } from "../../../src/domain/pipeline/director.js";
+import {
+  applyDirectorDefaults,
+  DEFAULT_CONTENT_REGION,
+} from "../../../src/domain/pipeline/director.js";
 
 describe("applyDirectorDefaults — tasteful rule-based default effects (effects-overhaul Phase C)", () => {
-  it("adds a gentle default zoom-in targeting the selector of a scene's focal (click) step", () => {
+  it("adds a gentle default zoom-in targeting the content region, not the focal step's selector", () => {
     const storyboard = parseStoryboard({
       steps: [
         { action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" },
@@ -15,8 +18,47 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
 
     expect(result.steps[0]?.effects).toContainEqual({
       type: "zoom-in",
-      params: { selector: "#invite-btn", level: 1.12 },
+      params: { ...DEFAULT_CONTENT_REGION, level: 1.12 },
     });
+    // Framing fix: the default zoom must never carry the clicked (sidebar) selector as its target.
+    const zoom = result.steps[0]?.effects.find((e) => e.type === "zoom-in");
+    expect(zoom?.params.selector).toBeUndefined();
+  });
+
+  it("honors a custom contentRegion in DirectorConfig", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" }],
+    });
+    const customRegion = { x: 10, y: 20, w: 300, h: 200 };
+
+    const result = applyDirectorDefaults(storyboard, { contentRegion: customRegion });
+
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "zoom-in",
+      params: { ...customRegion, level: 1.12 },
+    });
+  });
+
+  it("leaves an AI-proposed selector-targeted effect on another step untouched", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "click",
+          selector: "#invite-btn",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "zoom-in", params: { selector: "#invite-btn", level: 1.3 } }],
+        },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard);
+
+    // Scene already has an effect, so the Director adds nothing — the AI-proposed selector-based
+    // zoom is untouched, exactly as authored.
+    expect(result.steps[0]?.effects).toEqual([
+      { type: "zoom-in", params: { selector: "#invite-btn", level: 1.3 } },
+    ]);
   });
 
   it("zooms only every Nth eligible scene (selective, not every scene) — tasteful + light render", () => {
@@ -133,7 +175,7 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
 
     expect(result.steps[0]?.effects).toContainEqual({
       type: "zoom-in",
-      params: { selector: "#a", level: 1.2 },
+      params: { ...DEFAULT_CONTENT_REGION, level: 1.2 },
     });
   });
 });

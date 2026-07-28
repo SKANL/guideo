@@ -28,12 +28,32 @@ export interface DirectorConfig {
   // effects filtergraph (each animated zoom is a split+crop+scale+overlay — 7 of them made a live
   // render crawl for minutes). Interval 3 => zoom the 1st, 4th, 7th... eligible scene.
   readonly zoomSceneInterval: number;
+  // Viewport-relative pixel box (capture-config.ts's coordinate space, default 1280x720) the
+  // Director's own default zoom pushes into. Framing fix: the default zoom used to target the
+  // FOCAL step's selector, which for a "click a sidebar nav link" step is the sidebar link itself
+  // — the zoom emphasized the sidebar, not the content the narration is about. An explicit region
+  // sidesteps that entirely (no app-specific element resolution needed): it targets the main
+  // content area, right of the left sidebar and below the top bar. AI/user-authored effects that
+  // carry their own `selector` are untouched — only the Director's own default switches to this.
+  readonly contentRegion: {
+    readonly x: number;
+    readonly y: number;
+    readonly w: number;
+    readonly h: number;
+  };
 }
+
+// Default box tuned for the default 1280x720 viewport (capture-config.ts): a typical left sidebar
+// nav runs roughly 0-260px wide and a top bar roughly 0-64px tall, so 330,96 clears both with a
+// little margin; 830x540 keeps the box comfortably inside the remaining content area (ends at
+// 1160,636 — inside the 1280x720 frame) so the animated zoom's crop never reads outside the frame.
+export const DEFAULT_CONTENT_REGION = { x: 330, y: 96, w: 830, h: 540 } as const;
 
 export const DEFAULT_DIRECTOR_CONFIG: DirectorConfig = {
   zoomDefaultsEnabled: true,
   zoomLevel: 1.12,
   zoomSceneInterval: 3,
+  contentRegion: DEFAULT_CONTENT_REGION,
 };
 
 // Actions that target a specific on-screen element — a scene's focal point, if any. Matches the
@@ -102,7 +122,7 @@ export function applyDirectorDefaults(
       if (!shouldZoom) continue;
       const zoom: Effect = {
         type: "zoom-in",
-        params: { selector: step.selector, level: cfg.zoomLevel },
+        params: { ...cfg.contentRegion, level: cfg.zoomLevel },
       };
       steps[focalIndex] = withAddedEffect(step, zoom);
     }

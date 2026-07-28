@@ -10,6 +10,7 @@ import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/medi
 import type { NarrationSegment } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
+import { DEFAULT_CONTENT_REGION } from "../../../src/domain/pipeline/director.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
@@ -166,7 +167,7 @@ describe("runPlan", () => {
 
     expect(result.storyboard.steps[0]?.effects).toContainEqual({
       type: "zoom-in",
-      params: { selector: "#invite-btn", level: 1.12 },
+      params: { ...DEFAULT_CONTENT_REGION, level: 1.12 },
     });
     const writtenStoryboard = JSON.parse(await readFile(paths.storyboardPath, "utf8"));
     expect(writtenStoryboard).toEqual(result.storyboard);
