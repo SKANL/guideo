@@ -185,7 +185,7 @@ describe("WebRecordingEngine", () => {
     await engine.capture(approved);
 
     expect(harness.goto).toHaveBeenCalledWith("https://example.com/agency", {
-      waitUntil: "networkidle",
+      waitUntil: "load",
     });
   });
 
@@ -218,7 +218,7 @@ describe("WebRecordingEngine", () => {
 
     // navigate — waits for the configured settle state, not left to the default
     expect(harness.goto).toHaveBeenCalledWith("https://example.com/dashboard", {
-      waitUntil: "networkidle",
+      waitUntil: "load",
     });
     // click — targets the :visible match (multiple DOM matches can exist for one selector)
     expect(harness.click).toHaveBeenCalledWith("#login-btn:visible");
@@ -742,7 +742,7 @@ describe("WebRecordingEngine", () => {
       await engine.capture(approved);
 
       expect(harness.goto).toHaveBeenCalledWith("https://target.example.com/x", {
-        waitUntil: "networkidle",
+        waitUntil: "load",
       });
       expect(warn).toHaveBeenCalled();
 

@@ -50,7 +50,11 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   dismissKey: "Escape",
   dismissPresses: 2,
   dismissWaitMs: 300,
-  navigateWaitUntil: "networkidle",
+  // "load" (page load event), NOT "networkidle": authenticated pages with a persistent connection
+  // (chat widget, polling, websockets — e.g. camtom-webapp's support widget) NEVER reach network
+  // idle, so `networkidle` times out the navigation at 30s (real e2e). Per-step verification +
+  // self-heal (web-recording-engine) handle any not-yet-hydrated content after load.
+  navigateWaitUntil: "load",
   minSceneMs: 800,
   timingSlackMs: 250,
   stepRetries: 2,
