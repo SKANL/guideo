@@ -6,7 +6,10 @@ import type {
   PatchrightCaptureElementHandle,
   PatchrightCapturePage,
 } from "../../../src/adapters/recording/web-recording-engine.js";
-import { WebRecordingEngine } from "../../../src/adapters/recording/web-recording-engine.js";
+import {
+  resolveNavigateUrl,
+  WebRecordingEngine,
+} from "../../../src/adapters/recording/web-recording-engine.js";
 import { DEFAULT_LOGIN_CONFIG } from "../../../src/adapters/target/login.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { review } from "../../../src/domain/review-gate.js";
@@ -143,6 +146,23 @@ function fakeCaptureHarness(
     },
   };
 }
+
+describe("resolveNavigateUrl", () => {
+  it("resolves a relative navigate path against the current page (patchright rejects relative URLs)", () => {
+    expect(resolveNavigateUrl("/agency/dashboard", "https://app.example.com/home")).toBe(
+      "https://app.example.com/agency/dashboard",
+    );
+  });
+  it("passes an already-absolute URL through unchanged", () => {
+    expect(resolveNavigateUrl("https://app.example.com/x", "https://app.example.com/home")).toBe(
+      "https://app.example.com/x",
+    );
+  });
+  it("returns the raw value when it cannot resolve (empty, or relative with no base)", () => {
+    expect(resolveNavigateUrl("", "https://app.example.com")).toBe("");
+    expect(resolveNavigateUrl("/x", "")).toBe("/x");
+  });
+});
 
 describe("WebRecordingEngine", () => {
   const originalEnv = {

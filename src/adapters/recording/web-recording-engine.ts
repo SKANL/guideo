@@ -129,6 +129,21 @@ function errorMessage(err: unknown): string {
 // click self-heal fall back to a direct goto when the click itself didn't navigate.
 const ANCHOR_HREF_SELECTOR_RE = /^a\[href="([^"]*)"\]$/;
 
+// Resolves a model-authored navigate URL to an ABSOLUTE one. An already-absolute URL passes
+// through unchanged; a relative path (e.g. "/agency/dashboard") resolves against the current
+// (post-login) page URL. patchright's goto rejects a relative URL ("Cannot navigate to invalid
+// URL"), and the LLM sometimes emits relative routes (real e2e). Falls back to the raw value when
+// resolution isn't possible (empty input or no base), so navigateWithVerification surfaces a clear
+// error instead of this throwing.
+export function resolveNavigateUrl(raw: string, base: string): string {
+  if (!raw) return raw;
+  try {
+    return new URL(raw, base || undefined).toString();
+  } catch {
+    return raw;
+  }
+}
+
 export class WebRecordingEngine implements RecordingEngine {
   private readonly injectedLauncher: CaptureBrowserLauncher | undefined;
   private readonly random: Random;
@@ -322,7 +337,11 @@ export class WebRecordingEngine implements RecordingEngine {
         // The storyboard's navigate URL is model-authored, and the LLM is inconsistent about the
         // param key (url / route / href) — read all common variants rather than fail on an empty
         // goto (real e2e: a plan run put it under `route`, not `url`).
-        const url = String(step.params?.url ?? step.params?.route ?? step.params?.href ?? "");
+        const raw = String(step.params?.url ?? step.params?.route ?? step.params?.href ?? "");
+        // The LLM also sometimes emits a RELATIVE path (e.g. "/agency/dashboard") — patchright's
+        // goto rejects a relative URL ("Cannot navigate to invalid URL"). Resolve it against the
+        // current (post-login) page URL to an absolute URL before navigating (real e2e).
+        const url = resolveNavigateUrl(raw, page.url());
         await this.navigateWithVerification(page, url);
         return { mousePosition, elapsedMs: 0 };
       }
