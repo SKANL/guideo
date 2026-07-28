@@ -12,10 +12,17 @@
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "patchright";
-import type { RawClip, SceneRange } from "../../domain/models/media.js";
+import type { Effect } from "../../domain/models/effect.js";
+import type {
+  EffectRegion,
+  RawClip,
+  ResolvedEffect,
+  SceneRange,
+} from "../../domain/models/media.js";
 import type { ApprovedStoryboard, StoryboardStep } from "../../domain/models/storyboard.js";
 import type { Random } from "../../domain/ports/random.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
+import { regionFromParams } from "../effects/effect-filter-builders.js";
 import type { LoginConfig } from "../target/login.js";
 import {
   DEFAULT_LOGIN_CONFIG,
@@ -182,6 +189,11 @@ export class WebRecordingEngine implements RecordingEngine {
 
       let mousePosition = this.config.initialMousePosition;
       const scenes: SceneRange[] = [];
+      // Effect targeting (effects-overhaul Phase A): resolved WHILE running each step, so the
+      // target element is actually on screen — see resolveEffectRegion(). Accumulated in
+      // storyboard order across scenes so its positional index lines up with buildEffectsGraph's
+      // own iteration (see effects-graph.ts).
+      const resolvedEffects: ResolvedEffect[] = [];
 
       for (const scene of groupIntoScenes(storyboard.steps)) {
         const startMs = Math.round(elapsedMs);
@@ -193,6 +205,7 @@ export class WebRecordingEngine implements RecordingEngine {
         );
         mousePosition = result.mousePosition;
         elapsedMs += result.elapsedMs;
+        resolvedEffects.push(...result.resolvedEffects);
         const endMs = Math.round(elapsedMs);
         scenes.push({ narrationSegmentId: scene.narrationSegmentId, startMs, endMs });
       }
@@ -203,7 +216,14 @@ export class WebRecordingEngine implements RecordingEngine {
       await context.close();
       const path = video ? await video.path() : join(videoDir, "capture.webm");
 
-      return { path, durationMs: Math.round(elapsedMs), aspectRatio: "16:9", scenes, preRollMs };
+      return {
+        path,
+        durationMs: Math.round(elapsedMs),
+        aspectRatio: "16:9",
+        scenes,
+        preRollMs,
+        resolvedEffects,
+      };
     } finally {
       await browser.close();
     }
@@ -218,9 +238,10 @@ export class WebRecordingEngine implements RecordingEngine {
     scene: CaptureScene,
     mousePositionIn: Point,
     targetMs: number | undefined,
-  ): Promise<{ mousePosition: Point; elapsedMs: number }> {
+  ): Promise<{ mousePosition: Point; elapsedMs: number; resolvedEffects: ResolvedEffect[] }> {
     let mousePosition = mousePositionIn;
     let elapsedMs = 0;
+    const resolvedEffects: ResolvedEffect[] = [];
 
     for (const step of scene.steps) {
       const pauseMs = naturalPauseMs(this.random, this.humanFeel);
@@ -230,6 +251,17 @@ export class WebRecordingEngine implements RecordingEngine {
       const result = await this.runStep(page, step, mousePosition);
       mousePosition = result.mousePosition;
       elapsedMs += result.elapsedMs;
+
+      // Resolved HERE (right after the step's own action settles) so any element the step just
+      // navigated to / clicked / revealed is actually on screen for boundingBox() to find.
+      for (const effect of step.effects) {
+        const region = await this.resolveEffectRegion(page, effect);
+        resolvedEffects.push({
+          narrationSegmentId: step.narrationSegmentId,
+          type: effect.type,
+          region,
+        });
+      }
 
       // Same overlay can reappear (or a new one open) after a client-side route change.
       if (step.action === "navigate") elapsedMs += await this.dismissOverlays(page);
@@ -244,7 +276,40 @@ export class WebRecordingEngine implements RecordingEngine {
       }
     }
 
-    return { mousePosition, elapsedMs };
+    return { mousePosition, elapsedMs, resolvedEffects };
+  }
+
+  // Effect targeting (effects-overhaul Phase A): a `selector` in the effect's own params (NOT the
+  // step's action selector — an effect may target a different element than the one the step just
+  // acted on) is resolved to a pixel bounding box while the page is in the step's post-action
+  // state. An explicit {x,y,w,h} in params passes through unchanged. Neither present, or the
+  // selector resolves to no element -> null (caller/builder falls back to frame-center/whole-
+  // frame) — never throws; a missing effect target is a storyboard/target problem, not a reason to
+  // abort the whole capture.
+  private async resolveEffectRegion(
+    page: PatchrightCapturePage,
+    effect: Effect,
+  ): Promise<EffectRegion | null> {
+    const selector = typeof effect.params.selector === "string" ? effect.params.selector : "";
+    if (!selector) {
+      return regionFromParams(effect.params);
+    }
+    let handle: PatchrightCaptureElementHandle | null = null;
+    try {
+      handle = await this.withStepRetry(() => page.$(visibleSelector(selector)), page);
+    } catch (err) {
+      console.warn(
+        `WebRecordingEngine: giving up resolving effect target "${selector}" after retries — falling back. ${errorMessage(err)}`,
+      );
+    }
+    const box = await handle?.boundingBox();
+    if (!box) {
+      console.warn(
+        `WebRecordingEngine: effect selector "${selector}" resolved to no element — falling back.`,
+      );
+      return regionFromParams(effect.params);
+    }
+    return { x: box.x, y: box.y, w: box.width, h: box.height };
   }
 
   private async runStep(

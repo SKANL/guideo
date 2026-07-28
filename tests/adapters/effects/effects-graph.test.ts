@@ -115,6 +115,88 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
     warn.mockRestore();
   });
 
+  // --- Resolved regions (effects-overhaul Phase A: targeting) ------------------------------
+  // buildEffectsGraph must COMBINE the resolved region (from clip.resolvedEffects, captured while
+  // the target element was on screen) with the TIME gate (from clip.scenes) — this is the fix for
+  // effects always zooming the center regardless of the AI-proposed selector.
+
+  it("uses clip.resolvedEffects's region (captured selector target), centering zoom-in there instead of the frame", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 1000,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      preRollMs: 0,
+      resolvedEffects: [
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 100, y: 40, w: 20, h: 20 } },
+      ],
+    };
+    const approved = approve({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "zoom-in", params: {} }],
+        },
+      ],
+    });
+
+    const graph = buildEffectsGraph(clip, approved);
+
+    // center = x + w/2 = 110, y + h/2 = 50 — NOT the frame center (iw/2, ih/2).
+    expect(graph?.filterComplex).toContain("x='110-");
+    expect(graph?.filterComplex).toContain("y='50-");
+    expect(graph?.filterComplex).not.toContain("iw/2");
+  });
+
+  it("falls back to reading an explicit region straight from effect.params when clip.resolvedEffects is absent (back-compat)", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 1000,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      preRollMs: 0,
+      // no resolvedEffects field at all
+    };
+    const approved = approve({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "crop", params: { x: 10, y: 20, w: 100, h: 50 } }],
+        },
+      ],
+    });
+
+    const graph = buildEffectsGraph(clip, approved);
+
+    expect(graph?.filterComplex).toContain("drawbox=x=0:y=0:w=iw:h=20");
+  });
+
+  it("falls back to the frame center for zoom-in when neither resolvedEffects nor explicit params supply a region", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 1000,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      preRollMs: 0,
+      resolvedEffects: [{ narrationSegmentId: "seg-1", type: "zoom-in", region: null }],
+    };
+    const approved = approve({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "zoom-in", params: {} }],
+        },
+      ],
+    });
+
+    const graph = buildEffectsGraph(clip, approved);
+
+    expect(graph?.filterComplex).toContain("x='iw/2-");
+  });
+
   it("skips a malformed effect (fails its own builder validation) instead of throwing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const clip: RawClip = {

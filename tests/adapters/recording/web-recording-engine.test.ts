@@ -82,8 +82,9 @@ function fakeCaptureHarness(
   const waitForTimeout = vi.fn(async (ms: number) => {
     log.push(`wait:${ms}`);
   });
-  const $ = vi.fn(async (_selector: string) =>
-    fakeElement({ x: 100, y: 100, width: 50, height: 20 }),
+  const $ = vi.fn(
+    async (_selector: string): Promise<PatchrightCaptureElementHandle | null> =>
+      fakeElement({ x: 100, y: 100, width: 50, height: 20 }),
   );
   const closePage = vi.fn(async () => {});
 
@@ -764,6 +765,137 @@ describe("WebRecordingEngine", () => {
 
       // Only the login goto — no fallback goto for the click.
       expect(harness.goto).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // --- Effect targeting: resolve selector -> pixel region at capture (effects-overhaul Phase A)
+  describe("resolves effect targets to pixel regions during capture", () => {
+    it("resolves an effect's selector to the fake element's boundingBox and stores it in clip.resolvedEffects", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$.mockResolvedValueOnce(fakeElement({ x: 10, y: 20, width: 100, height: 50 }));
+      const storyboard = parseStoryboard({
+        steps: [
+          {
+            action: "pause",
+            narrationSegmentId: "seg-1",
+            effects: [{ type: "zoom-in", params: { selector: "#chart" } }],
+          },
+        ],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(clip.resolvedEffects).toEqual([
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 10, y: 20, w: 100, h: 50 } },
+      ]);
+      expect(harness.$).toHaveBeenCalledWith("#chart:visible");
+    });
+
+    it("passes an explicit {x,y,w,h} through without calling page.$", async () => {
+      const harness = fakeCaptureHarness();
+      const storyboard = parseStoryboard({
+        steps: [
+          {
+            action: "pause",
+            narrationSegmentId: "seg-1",
+            effects: [{ type: "crop", params: { x: 5, y: 6, w: 7, h: 8 } }],
+          },
+        ],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(clip.resolvedEffects).toEqual([
+        { narrationSegmentId: "seg-1", type: "crop", region: { x: 5, y: 6, w: 7, h: 8 } },
+      ]);
+      expect(harness.$).not.toHaveBeenCalled();
+    });
+
+    it("falls back to a null region (never crashes) when an effect has neither a selector nor explicit coordinates", async () => {
+      const harness = fakeCaptureHarness();
+      const storyboard = parseStoryboard({
+        steps: [
+          {
+            action: "pause",
+            narrationSegmentId: "seg-1",
+            effects: [{ type: "zoom-in", params: {} }],
+          },
+        ],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(clip.resolvedEffects).toEqual([
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: null },
+      ]);
+    });
+
+    it("falls back to a null region (logs a warning) when the effect's selector resolves to no element", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$.mockResolvedValueOnce(null);
+      const storyboard = parseStoryboard({
+        steps: [
+          {
+            action: "pause",
+            narrationSegmentId: "seg-1",
+            effects: [{ type: "zoom-in", params: { selector: "#gone" } }],
+          },
+        ],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(clip.resolvedEffects).toEqual([
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: null },
+      ]);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("resolves multiple effects across multiple steps in storyboard order", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$.mockImplementation(async (selector: string) => {
+        if (selector === "#a:visible") return fakeElement({ x: 1, y: 2, width: 3, height: 4 });
+        if (selector === "#b:visible") return fakeElement({ x: 5, y: 6, width: 7, height: 8 });
+        return fakeElement({ x: 100, y: 100, width: 50, height: 20 });
+      });
+      const storyboard = parseStoryboard({
+        steps: [
+          {
+            action: "pause",
+            narrationSegmentId: "seg-1",
+            effects: [{ type: "zoom-in", params: { selector: "#a" } }],
+          },
+          {
+            action: "pause",
+            narrationSegmentId: "seg-2",
+            effects: [{ type: "zoom-out", params: { selector: "#b" } }],
+          },
+        ],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(clip.resolvedEffects).toEqual([
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 1, y: 2, w: 3, h: 4 } },
+        { narrationSegmentId: "seg-2", type: "zoom-out", region: { x: 5, y: 6, w: 7, h: 8 } },
+      ]);
     });
   });
 });

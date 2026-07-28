@@ -85,4 +85,30 @@ describe("FfmpegEffectsEngine (ffmpeg integration)", () => {
     const stats = await stat(edited.path);
     expect(stats.size).toBeGreaterThan(0);
   }, 30_000);
+
+  it("applies a real ANIMATED zoom-in gated to a region and time range, producing a valid non-empty video (effects-overhaul Phase A)", async (ctx) => {
+    if (!ffmpegAvailable) {
+      ctx.skip();
+      return;
+    }
+
+    const engine = new FfmpegEffectsEngine();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "zoom-in", params: { x: 20, y: 20, w: 80, h: 60, level: 1.4 } }],
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const edited = await engine.apply(rawClip, approved);
+
+    expect(edited.path).not.toBe(rawClip.path);
+    const stats = await stat(edited.path);
+    expect(stats.size).toBeGreaterThan(0);
+  }, 30_000);
 });
