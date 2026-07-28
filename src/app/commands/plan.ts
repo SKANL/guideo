@@ -7,7 +7,7 @@ import type { Storyboard } from "../../domain/models/storyboard.js";
 import { plan } from "../../domain/pipeline/planning.js";
 import type { ScriptGen } from "../../domain/ports/script-gen.js";
 import type { Target } from "../../domain/ports/target.js";
-import { defaultPaths, type GuideoPaths } from "../paths.js";
+import { type GuideoPaths, projectPaths } from "../paths.js";
 
 // Loads the flow graph that `guideo discover` persisted. plan does NOT re-run discovery — the
 // graph is discovered once (an expensive, live-browser step) and reused across many plans, per the
@@ -29,7 +29,7 @@ function loadPersistedFlowGraph(flowGraphPath: string): FlowGraph {
 export async function runPlan(
   container: { readonly scriptGen: ScriptGen },
   brief: Brief,
-  paths: GuideoPaths = defaultPaths(),
+  paths: GuideoPaths = projectPaths({ project: "default" }),
 ): Promise<{ script: Script; storyboard: Storyboard }> {
   const graph = loadPersistedFlowGraph(paths.flowGraphPath);
   // A cached-graph Target: plan() consumes the already-discovered graph, no live browser here.

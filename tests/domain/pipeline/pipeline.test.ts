@@ -92,7 +92,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const approved = review(storyboard, { kind: "approved" });
     if (approved === null) throw new Error("expected approval to mint an ApprovedStoryboard");
 
-    const finalVideo = await render(approved, script, engine, voice, profile);
+    const finalVideo = await render(approved, script, engine, voice, profile, "final.mp4");
 
     expect(engine.captureCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
@@ -137,7 +137,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       },
     };
 
-    await render(approved, script, engine, voice, profile);
+    await render(approved, script, engine, voice, profile, "final.mp4");
 
     expect(maxInFlight).toBe(1);
   });

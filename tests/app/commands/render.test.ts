@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ElevenLabsVoice } from "../../../src/adapters/voice/elevenlabs-voice.js";
 import { runRender } from "../../../src/app/commands/render.js";
-import { defaultPaths } from "../../../src/app/paths.js";
+import { projectPaths } from "../../../src/app/paths.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
 import type { NarrationSegment } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
@@ -42,15 +42,17 @@ class FakeVoiceGen implements VoiceGen {
 
 class FakePlatformProfile implements PlatformProfile {
   composeCalls = 0;
+  lastParams: ComposeParams | undefined;
   async compose(params: ComposeParams): Promise<FinalVideo> {
     this.composeCalls += 1;
+    this.lastParams = params;
     return { path: "final.mp4", aspectRatio: params.rawClip.aspectRatio };
   }
 }
 
 let scratchDir: string | undefined;
 
-async function writeApprovedFixtures(paths: ReturnType<typeof defaultPaths>): Promise<void> {
+async function writeApprovedFixtures(paths: ReturnType<typeof projectPaths>): Promise<void> {
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.scriptPath, JSON.stringify(script), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard), "utf8");
@@ -66,7 +68,7 @@ afterEach(async () => {
 describe("runRender", () => {
   it("refuses without --approve and never calls capture/synthesize/compose (no spend)", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
     const voice = new FakeVoiceGen();
@@ -87,7 +89,7 @@ describe("runRender", () => {
 
   it("with --approve, mints the ApprovedStoryboard and renders exactly once through each adapter", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
     const voice = new FakeVoiceGen();
@@ -103,6 +105,9 @@ describe("runRender", () => {
     expect(engine.captureCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
     expect(profile.composeCalls).toBe(1);
+    // The pipeline must hand the STABLE project output path to compose(), not let the adapter
+    // pick its own (temp-dir) path.
+    expect(profile.lastParams?.outputPath).toBe(paths.outputPath);
   });
 
   describe("missing ELEVENLABS_API_KEY", () => {
@@ -122,7 +127,7 @@ describe("runRender", () => {
 
     it("surfaces a clear error instead of failing silently when render needs voice synthesis and no key is set", async () => {
       scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
-      const paths = defaultPaths(scratchDir);
+      const paths = projectPaths({ project: "test-project", cwd: scratchDir });
       await writeApprovedFixtures(paths);
       const engine = new FakeRecordingEngine();
       const profile = new FakePlatformProfile();

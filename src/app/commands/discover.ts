@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import type { FlowGraph } from "../../domain/models/flow-graph.js";
 import type { Target } from "../../domain/ports/target.js";
-import { defaultPaths, type GuideoPaths } from "../paths.js";
+import { type GuideoPaths, projectPaths } from "../paths.js";
 
 // discover: runs Target.discover() and persists the resulting FlowGraph as CLI-owned JSON at a
 // port-agnostic, CLI-controlled path. Deliberately does not rely on any adapter's own internal
@@ -10,7 +10,7 @@ import { defaultPaths, type GuideoPaths } from "../paths.js";
 // JSON to disk" requirement for every Target implementation, fake or real).
 export async function runDiscover(
   container: { readonly target: Target },
-  paths: GuideoPaths = defaultPaths(),
+  paths: GuideoPaths = projectPaths({ project: "default" }),
 ): Promise<{ graph: FlowGraph; path: string }> {
   const graph = await container.target.discover();
   await mkdir(paths.guideoDir, { recursive: true });

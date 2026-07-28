@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPlan } from "../../../src/app/commands/plan.js";
-import { defaultPaths } from "../../../src/app/paths.js";
+import { projectPaths } from "../../../src/app/paths.js";
 import { parseBrief } from "../../../src/domain/models/brief.js";
 import { parseFlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
@@ -23,7 +23,7 @@ const graph = parseFlowGraph({
 });
 
 // Simulates a prior `guideo discover` by persisting the flow graph where runPlan reads it.
-async function writeGraph(paths: ReturnType<typeof defaultPaths>): Promise<void> {
+async function writeGraph(paths: ReturnType<typeof projectPaths>): Promise<void> {
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.flowGraphPath, JSON.stringify(graph, null, 2), "utf8");
 }
@@ -85,7 +85,7 @@ afterEach(async () => {
 describe("runPlan", () => {
   it("produces and persists script.json + storyboard.json without touching capture/voice/compose (the REVIEW-gate hard stop)", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeGraph(paths);
     const scriptGen = new FakeScriptGen();
     const engine = new FakeRecordingEngine();
@@ -112,7 +112,7 @@ describe("runPlan", () => {
 
   it("re-plans for a different brief and overwrites the previously planned files", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeGraph(paths);
     const scriptGen = new FakeScriptGen();
     const briefOne = parseBrief({
@@ -133,7 +133,7 @@ describe("runPlan", () => {
 
   it("fails with a clear 'run discover first' error when no flow graph is on disk", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     const scriptGen = new FakeScriptGen();
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
 

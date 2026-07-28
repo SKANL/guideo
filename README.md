@@ -35,19 +35,25 @@ video. Only `render --approve`, run after you've reviewed the plan, does that.
 cp env.example .env
 # edit .env: GUIDEO_TARGET_URL, GUIDEO_TARGET_USERNAME, GUIDEO_TARGET_PASSWORD, ELEVENLABS_API_KEY
 
-# 2. Discover the target app's flows -> .guideo/flow-graph.json
+# 2. Discover the target app's flows -> .guideo/projects/<project>/flow-graph.json
 npm run guideo -- discover
 
-# 3. Plan a script + storyboard from a brief -> .guideo/{script,storyboard}.json, printed for review
+# 3. Plan a script + storyboard from a brief -> .guideo/projects/<project>/{script,storyboard}.json,
+#    printed for review
 npm run guideo -- plan --brief "Show how to invite a teammate" --platform youtube
 
 # 4. Review the printed script + storyboard. Only once you approve:
 npm run guideo -- render --approve
-# -> prints the path to the final 16:9 .mp4
+# -> the final video is written to the STABLE path
+#    .guideo/projects/<project>/output/<platform>.mp4 (printed on success)
 
 # Without --approve, render always refuses and does nothing:
 npm run guideo -- render
 ```
+
+Artifacts are project-scoped: every command accepts `--project <name>` so multiple targets/briefs
+never collide. `--project` defaults to a slug of `GUIDEO_TARGET_URL`'s host (e.g.
+`camtom-webapp.vercel.app` -> `camtom-webapp-vercel-app`), or `"default"` if that env var is unset.
 
 `node --env-file-if-exists=.env` (baked into the `guideo` npm script) loads `.env` automatically;
 it never errors if `.env` is missing (e.g. `guideo --help` needs no environment at all).

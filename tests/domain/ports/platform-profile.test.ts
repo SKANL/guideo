@@ -16,6 +16,7 @@ describe("PlatformProfile port", () => {
       rawClip: { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9" },
       audioTracks: [{ segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1000 }],
       subtitles: [{ text: "Let's log in.", startMs: 0, durationMs: 1000 }],
+      outputPath: "final.mp4",
     });
     expect(finalVideo.aspectRatio).toBe("16:9");
     expect(profile.metrics).toBeUndefined();

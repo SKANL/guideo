@@ -4,6 +4,9 @@ export interface ComposeParams {
   readonly rawClip: RawClip;
   readonly audioTracks: readonly Audio[];
   readonly subtitles: readonly Subtitle[];
+  // STABLE caller-provided path the adapter must write the final video to (never a self-chosen
+  // temp dir) — see src/app/paths.ts.
+  readonly outputPath: string;
 }
 
 export interface PlatformProfile {

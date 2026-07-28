@@ -7,7 +7,7 @@ import type { PlatformProfile } from "../../domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
 import type { VoiceGen } from "../../domain/ports/voice-gen.js";
 import { review } from "../../domain/review-gate.js";
-import { defaultPaths, type GuideoPaths } from "../paths.js";
+import { type GuideoPaths, projectPaths } from "../paths.js";
 
 // render: the only code path that may reach RecordingEngine/VoiceGen/PlatformProfile — and only
 // when `approve` is explicitly true. Without it, this throws before reading or touching anything
@@ -22,7 +22,7 @@ export async function runRender(
     readonly platformProfile: PlatformProfile;
   },
   approve: boolean,
-  paths: GuideoPaths = defaultPaths(),
+  paths: GuideoPaths = projectPaths({ project: "default" }),
 ): Promise<FinalVideo> {
   if (!approve) {
     throw new Error(
@@ -47,5 +47,6 @@ export async function runRender(
     container.recordingEngine,
     container.voiceGen,
     container.platformProfile,
+    paths.outputPath,
   );
 }

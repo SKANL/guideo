@@ -1,10 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UrlCredsTarget } from "../../src/adapters/target/url-creds-target.js";
 import type { Container } from "../../src/app/factory.js";
-import { defaultPaths } from "../../src/app/paths.js";
+import { projectPaths } from "../../src/app/paths.js";
 import { runCli } from "../../src/app/run.js";
 import type { FlowGraph } from "../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip } from "../../src/domain/models/media.js";
@@ -71,8 +71,10 @@ class FakeVoiceGen implements VoiceGen {
 
 class FakePlatformProfile implements PlatformProfile {
   composeCalls = 0;
+  lastParams: ComposeParams | undefined;
   async compose(params: ComposeParams): Promise<FinalVideo> {
     this.composeCalls += 1;
+    this.lastParams = params;
     return { path: "final.mp4", aspectRatio: params.rawClip.aspectRatio };
   }
 }
@@ -170,15 +172,15 @@ describe("runCli", () => {
 
   it("plan with a valid brief prints the script + storyboard review and writes files, touching no spend adapters", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-plan-test-"));
-    const paths = defaultPaths(scratchDir);
+    const cwd = scratchDir;
     const { container, engine, voice, profile } = makeContainer();
     const sink = makeSink();
-    await runCli(["discover"], container, paths, sink.print, sink.printErr);
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
 
     const code = await runCli(
       ["plan", "--brief", "Show how to invite a teammate", "--platform", "youtube"],
       container,
-      paths,
+      cwd,
       sink.print,
       sink.printErr,
     );
@@ -194,19 +196,19 @@ describe("runCli", () => {
 
   it("render without --approve refuses at the CLI layer with no spend", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-test-"));
-    const paths = defaultPaths(scratchDir);
+    const cwd = scratchDir;
     const { container, engine, voice, profile } = makeContainer();
     const sink = makeSink();
-    await runCli(["discover"], container, paths, sink.print, sink.printErr);
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
     await runCli(
       ["plan", "--brief", "Show how to invite a teammate"],
       container,
-      paths,
+      cwd,
       sink.print,
       sink.printErr,
     );
 
-    const code = await runCli(["render"], container, paths, sink.print, sink.printErr);
+    const code = await runCli(["render"], container, cwd, sink.print, sink.printErr);
 
     expect(code).toBe(1);
     expect(sink.errLines.join("\n")).toMatch(/--approve/);
@@ -217,25 +219,84 @@ describe("runCli", () => {
 
   it("render --approve after a plan run renders through every spend adapter exactly once", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-test-"));
-    const paths = defaultPaths(scratchDir);
+    const cwd = scratchDir;
     const { container, engine, voice, profile } = makeContainer();
     const sink = makeSink();
-    await runCli(["discover"], container, paths, sink.print, sink.printErr);
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
     await runCli(
       ["plan", "--brief", "Show how to invite a teammate"],
       container,
-      paths,
+      cwd,
       sink.print,
       sink.printErr,
     );
 
-    const code = await runCli(["render", "--approve"], container, paths, sink.print, sink.printErr);
+    const code = await runCli(["render", "--approve"], container, cwd, sink.print, sink.printErr);
 
     expect(code).toBe(0);
     expect(sink.lines.at(-1)).toMatch(/final\.mp4/);
     expect(engine.captureCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
     expect(profile.composeCalls).toBe(1);
+  });
+
+  it("render --approve writes the final video to the STABLE project output path, not a temp dir", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-stable-test-"));
+    const cwd = scratchDir;
+    const { container, profile } = makeContainer();
+    const sink = makeSink();
+    await runCli(["discover", "--project", "acme"], container, cwd, sink.print, sink.printErr);
+    await runCli(
+      ["plan", "--brief", "Show how to invite a teammate", "--project", "acme"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    const code = await runCli(
+      ["render", "--approve", "--project", "acme"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    expect(code).toBe(0);
+    const expectedOutputPath = projectPaths({ project: "acme", cwd }).outputPath;
+    expect(expectedOutputPath).toMatch(/[\\/]projects[\\/]acme[\\/]output[\\/]youtube\.mp4$/);
+    expect(profile.lastParams?.outputPath).toBe(expectedOutputPath);
+    // No mkdtemp/OS-temp-dir path leaked into what the compose adapter was asked to write to.
+    expect(profile.lastParams?.outputPath).not.toMatch(/guideo-compose-/);
+  });
+
+  it("isolates artifacts per --project: a different project writes to a different directory", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-project-isolation-test-"));
+    const cwd = scratchDir;
+    const { container: containerA } = makeContainer();
+    const { container: containerB } = makeContainer();
+    const sink = makeSink();
+
+    await runCli(
+      ["discover", "--project", "project-a"],
+      containerA,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+    await runCli(
+      ["discover", "--project", "project-b"],
+      containerB,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    const pathsA = projectPaths({ project: "project-a", cwd });
+    const pathsB = projectPaths({ project: "project-b", cwd });
+    expect(pathsA.flowGraphPath).not.toBe(pathsB.flowGraphPath);
+    await expect(stat(pathsA.flowGraphPath)).resolves.toBeDefined();
+    await expect(stat(pathsB.flowGraphPath)).resolves.toBeDefined();
   });
 
   describe("missing target env vars", () => {
@@ -262,7 +323,7 @@ describe("runCli", () => {
 
     it("discover with the real UrlCredsTarget and no env vars fails with a clear message, no browser launch", async () => {
       scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-discover-test-"));
-      const paths = defaultPaths(scratchDir);
+      const cwd = scratchDir;
       // readTargetEnvOrThrow() runs before any browser/network I/O — safe for npm test.
       const container: Container = {
         target: new UrlCredsTarget(),
@@ -273,7 +334,7 @@ describe("runCli", () => {
       };
       const sink = makeSink();
 
-      const code = await runCli(["discover"], container, paths, sink.print, sink.printErr);
+      const code = await runCli(["discover"], container, cwd, sink.print, sink.printErr);
 
       expect(code).toBe(1);
       expect(sink.errLines.join("\n")).toMatch(/GUIDEO_TARGET_URL/);

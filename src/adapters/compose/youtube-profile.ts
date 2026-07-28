@@ -5,10 +5,9 @@
 // shell metacharacters in a clip/audio/output path can never inject flags or commands — see
 // buildComposeArgv (compose-argv.ts) and its argv-safety tests for the literal-argv-item proof.
 import { execFile as execFileCb } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { FinalVideo, PlatformMetrics } from "../../domain/models/media.js";
 import type { ComposeParams, PlatformProfile } from "../../domain/ports/platform-profile.js";
@@ -23,15 +22,17 @@ export class YouTubeProfile implements PlatformProfile {
   readonly metrics?: PlatformMetrics;
 
   async compose(params: ComposeParams): Promise<FinalVideo> {
+    // Only the transient subtitle file lives in a scratch temp dir — the final video always goes
+    // to the caller-provided STABLE params.outputPath (see ComposeParams doc comment).
     const workDir = await mkdtemp(join(tmpdir(), "guideo-compose-"));
     const srtPath = join(workDir, "subtitles.srt");
     await writeFile(srtPath, toSrt(params.subtitles), "utf8");
 
-    const outputPath = join(workDir, `final-${randomUUID()}.mp4`);
-    const argv = buildComposeArgv(params, srtPath, outputPath);
+    await mkdir(dirname(params.outputPath), { recursive: true });
+    const argv = buildComposeArgv(params, srtPath, params.outputPath);
 
     await execFile(resolveFfmpegPath(), argv);
 
-    return { path: outputPath, aspectRatio: "16:9" };
+    return { path: params.outputPath, aspectRatio: "16:9" };
   }
 }

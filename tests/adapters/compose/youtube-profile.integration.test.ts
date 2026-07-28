@@ -76,15 +76,20 @@ describe("YouTubeProfile (ffmpeg integration)", () => {
     }
 
     const profile = new YouTubeProfile();
+    // A subdir that does not exist yet — proves compose() creates it and writes there directly,
+    // never to a self-chosen OS temp dir.
+    const outputPath = join(fixtureDir, "output", "youtube.mp4");
     const params: ComposeParams = {
       rawClip,
       audioTracks: [audio],
       subtitles: [{ text: "Hello world.", startMs: 0, durationMs: 1000 }],
+      outputPath,
     };
 
     const finalVideo = await profile.compose(params);
 
     expect(finalVideo.aspectRatio).toBe("16:9");
+    expect(finalVideo.path).toBe(outputPath);
     const stats = await stat(finalVideo.path);
     expect(stats.size).toBeGreaterThan(0);
   }, 30_000);

@@ -19,13 +19,14 @@ export async function render(
   engine: RecordingEngine,
   voice: VoiceGen,
   profile: PlatformProfile,
+  outputPath: string,
 ): Promise<FinalVideo> {
   const [rawClip, audioTracks] = await Promise.all([
     engine.capture(approved),
     synthesizeSequentially(voice, script),
   ]);
   const subtitles = deriveSubtitles(script, audioTracks);
-  return profile.compose({ rawClip, audioTracks, subtitles });
+  return profile.compose({ rawClip, audioTracks, subtitles, outputPath });
 }
 
 // One narration segment at a time — never overlapping — so a rate-limited TTS provider is never

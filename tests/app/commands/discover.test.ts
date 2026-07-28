@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runDiscover } from "../../../src/app/commands/discover.js";
-import { defaultPaths } from "../../../src/app/paths.js";
+import { projectPaths } from "../../../src/app/paths.js";
 import type { FlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Target } from "../../../src/domain/ports/target.js";
 
@@ -28,7 +28,7 @@ afterEach(async () => {
 describe("runDiscover", () => {
   it("calls Target.discover() and persists the returned FlowGraph as JSON at the CLI-owned path", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     const graph: FlowGraph = {
       nodes: [
         {
@@ -53,7 +53,7 @@ describe("runDiscover", () => {
 
   it("overwrites a previously written flow graph on re-run (re-runnable per spec)", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
-    const paths = defaultPaths(scratchDir);
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     const firstGraph: FlowGraph = {
       nodes: [{ id: "n1", feature: "old", useCase: "old flow", preconditions: [], selectors: {} }],
       edges: [],
