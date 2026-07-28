@@ -14,20 +14,10 @@ export interface SceneAssembleClipInput {
   readonly durationSec: number;
 }
 
-// Per-scene-clip architecture Phase 1: composes N standalone scene clips into ONE assembled clip
-// with a duration-preserving dip transition at every boundary. Each fade is LOCAL to its own scene
-// clip's input stream ([i:v]) — never gated against the shared/assembled timeline the way the old
-// single-clip `fade=in:st=T` was (that blacked out everything before T across the WHOLE video; see
-// director.ts's history). clip N's own fade-out and clip N+1's own fade-in each only ever touch
-// that clip's own frames, so this is correct by construction. Concat then joins the (already
-// locally-faded) clips back-to-back with NO overlap, so total duration is always exactly the sum
-// of the inputs' durations — audio/subtitles derived from Script/Audio timing stay aligned.
-export function buildSceneAssembleArgv(
+function buildDipFilterComplex(
   clips: readonly SceneAssembleClipInput[],
   transitionDurationSec: number,
-  outputPath: string,
-): string[] {
-  const inputArgs = clips.flatMap((clip) => ["-i", sanitizePositionalPath(clip.path)]);
+): string {
   const chains = clips.map((clip, i) => {
     const isFirst = i === 0;
     const isLast = i === clips.length - 1;
@@ -46,7 +36,55 @@ export function buildSceneAssembleArgv(
     return `[${i}:v]${filter}[c${i}]`;
   });
   const concatInputs = clips.map((_, i) => `[c${i}]`).join("");
-  const filterComplex = `${chains.join(";")};${concatInputs}concat=n=${clips.length}:v=1:a=0[vout]`;
+  return `${chains.join(";")};${concatInputs}concat=n=${clips.length}:v=1:a=0[vout]`;
+}
+
+// Real crossfade: chains ffmpeg's `xfade` filter left-to-right, each transition OVERLAPPING the
+// running (already-merged) stream with the next clip by transitionDurationSec. `offset` is the
+// timestamp in the running stream at which THAT transition starts — i.e. sum(durations of clips
+// merged so far) minus every transitionDurationSec already consumed by prior transitions. This is
+// the exact same value as scene k's overlap-adjusted startMs (see ffmpeg-scene-assembler.ts's
+// rebaseScenesXfade) by construction: a scene begins exactly when its clip starts crossfading in.
+// Clamped to >= 0 (ffmpeg's own xfade filter has no defined behavior for a negative offset) —
+// only reachable if a clip is shorter than the configured transition duration.
+function buildXfadeFilterComplex(
+  clips: readonly SceneAssembleClipInput[],
+  transitionDurationSec: number,
+): string {
+  if (clips.length === 1) {
+    return "[0:v]null[c0];[c0]concat=n=1:v=1:a=0[vout]";
+  }
+  let accumulatedSec = clips[0]?.durationSec ?? 0;
+  const transitions = clips.slice(1).map((clip, idx) => {
+    const isLast = idx === clips.length - 2;
+    const inLabel = idx === 0 ? "[0:v]" : `[x${idx - 1}]`;
+    const outLabel = isLast ? "[vout]" : `[x${idx}]`;
+    const offsetSec = Math.max(0, accumulatedSec - transitionDurationSec);
+    accumulatedSec = accumulatedSec + clip.durationSec - transitionDurationSec;
+    return `${inLabel}[${idx + 1}:v]xfade=transition=fade:duration=${transitionDurationSec}:offset=${offsetSec.toFixed(3)}${outLabel}`;
+  });
+  return transitions.join(";");
+}
+
+// Per-scene-clip architecture: composes N standalone scene clips into ONE assembled clip.
+// style="xfade" (real crossfade, default at the FfmpegSceneAssembler level) chains ffmpeg's
+// `xfade` filter so consecutive clips genuinely OVERLAP by transitionDurationSec — total duration
+// shrinks to sum(durations) − (N−1)·transitionDurationSec. style="dip" (the original fallback) is
+// duration-preserving: each fade is LOCAL to its own scene clip's input stream ([i:v]) — never
+// gated against the shared/assembled timeline the way the old single-clip `fade=in:st=T` was (that
+// blacked out everything before T across the WHOLE video; see director.ts's history) — then concat
+// joins the (already locally-faded) clips back-to-back with NO overlap.
+export function buildSceneAssembleArgv(
+  clips: readonly SceneAssembleClipInput[],
+  transitionDurationSec: number,
+  outputPath: string,
+  style: "dip" | "xfade" = "dip",
+): string[] {
+  const inputArgs = clips.flatMap((clip) => ["-i", sanitizePositionalPath(clip.path)]);
+  const filterComplex =
+    style === "xfade"
+      ? buildXfadeFilterComplex(clips, transitionDurationSec)
+      : buildDipFilterComplex(clips, transitionDurationSec);
 
   return [
     "-y",

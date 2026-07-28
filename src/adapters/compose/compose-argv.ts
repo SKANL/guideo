@@ -21,6 +21,54 @@ function escapeForSubtitlesFilter(path: string): string {
   return `'${escaped}'`;
 }
 
+// Compares each audio track's scene startMs (from RawClip.scenes, matched by segmentId) against
+// the naive back-to-back concat cumulative offset (sum of PRECEDING tracks' own durations). With
+// "dip" assembly (contiguous scenes, no overlap) these always match, so the plain concat filter
+// stays byte-identical to before this feature existed. With "xfade" assembly the video timeline
+// shrinks — each scene starts EARLIER than the naive cumulative sum by the overlap already
+// consumed — so audio must be placed at the real scene startMs (adelay) instead of concatenated
+// back-to-back, or narration drifts ahead of the (shrinking) video. Returns null when every offset
+// matches (use the legacy concat filter unchanged); otherwise the per-track offsets to adelay by.
+function computeOverlapAdjustedOffsetsMs(
+  audioTracks: ComposeParams["audioTracks"],
+  scenes: ComposeParams["rawClip"]["scenes"],
+): number[] | null {
+  if (audioTracks.length === 0) return null;
+  const sceneBySegmentId = new Map(scenes.map((scene) => [scene.narrationSegmentId, scene]));
+  let cumulativeMs = 0;
+  let anyOverlap = false;
+  const offsets = audioTracks.map((track) => {
+    const scene = sceneBySegmentId.get(track.segmentId);
+    const offset = scene?.startMs ?? cumulativeMs;
+    if (scene !== undefined && Math.round(scene.startMs) !== Math.round(cumulativeMs)) {
+      anyOverlap = true;
+    }
+    cumulativeMs += track.durationMs;
+    return offset;
+  });
+  return anyOverlap ? offsets : null;
+}
+
+// Real crossfade (overlap-adjusted) audio path: each track gets its own `adelay` to its scene's
+// real startMs (skipped — via ffmpeg's `anull` identity filter — for an offset of 0, i.e. always
+// the first track), then every delayed track is summed with `amix` (normalize=0 so N simultaneous
+// tracks aren't quietened; overlapping narration briefly playing together during a crossfade window
+// is the accepted tradeoff of this simplification — see design doc).
+function buildAdelayAmixFilter(
+  audioTracks: ComposeParams["audioTracks"],
+  offsetsMs: readonly number[],
+  firstInputIndex: number,
+): string {
+  const delayed = audioTracks.map((_, i) => {
+    const inputLabel = `[${firstInputIndex + i}:a]`;
+    const offsetMs = offsetsMs[i] ?? 0;
+    const filter = offsetMs > 0 ? `adelay=${Math.round(offsetMs)}:all=1` : "anull";
+    return `${inputLabel}${filter}[a${i}]`;
+  });
+  const mixInputs = audioTracks.map((_, i) => `[a${i}]`).join("");
+  return `${delayed.join(";")};${mixInputs}amix=inputs=${audioTracks.length}:duration=longest:normalize=0[aout]`;
+}
+
 export function buildComposeArgv(
   params: ComposeParams,
   srtPath: string,
@@ -51,9 +99,17 @@ export function buildComposeArgv(
     "-i",
     sanitizePositionalPath(audio.path),
   ]);
-  const audioLabels = params.audioTracks.map((_, i) => `[${i + 1}:a]`).join("");
   const subtitleInputArgs = includeSubtitles ? ["-i", sanitizePositionalPath(srtPath)] : [];
   const subtitleInputIndex = params.audioTracks.length + 1;
+
+  const overlapOffsetsMs = computeOverlapAdjustedOffsetsMs(
+    params.audioTracks,
+    params.rawClip.scenes,
+  );
+  const audioFilterComplex =
+    overlapOffsetsMs !== null
+      ? buildAdelayAmixFilter(params.audioTracks, overlapOffsetsMs, 1)
+      : `${params.audioTracks.map((_, i) => `[${i + 1}:a]`).join("")}concat=n=${params.audioTracks.length}:v=0:a=1[aout]`;
 
   return [
     "-y",
@@ -62,7 +118,7 @@ export function buildComposeArgv(
     ...audioInputArgs,
     ...subtitleInputArgs,
     "-filter_complex",
-    `${audioLabels}concat=n=${params.audioTracks.length}:v=0:a=1[aout]`,
+    audioFilterComplex,
     "-map",
     "0:v",
     "-map",

@@ -119,7 +119,10 @@ describe("FfmpegSceneSplitter + FfmpegSceneAssembler (ffmpeg integration)", () =
     const sceneClips = await splitter.split(rawClip);
     expect(sceneClips).toHaveLength(3);
 
-    const assembled = await assembler.assemble(sceneClips, { transitionDurationSec: 0.25 });
+    const assembled = await assembler.assemble(sceneClips, {
+      transitionStyle: "dip",
+      transitionDurationSec: 0.25,
+    });
 
     expect(assembled.path).not.toBe(rawClip.path);
     expect(assembled.durationMs).toBe(TOTAL_SEC * 1000);
@@ -135,5 +138,41 @@ describe("FfmpegSceneSplitter + FfmpegSceneAssembler (ffmpeg integration)", () =
       return;
     }
     expect(Math.abs(outputDurationSec - TOTAL_SEC)).toBeLessThanOrEqual(0.3);
+  }, 30_000);
+
+  // Real xfade crossfade (default transitionStyle) — total output duration shrinks by
+  // (N-1)*transitionDurationSec since consecutive clips genuinely overlap.
+  it("splits a 3-scene clip and reassembles it with xfade crossfades into a valid, overlap-shrunk output", async (ctx) => {
+    if (!ffmpegAvailable) {
+      ctx.skip();
+      return;
+    }
+
+    const splitter = new FfmpegSceneSplitter();
+    const assembler = new FfmpegSceneAssembler();
+    const transitionDurationSec = 0.25;
+
+    const sceneClips = await splitter.split(rawClip);
+    expect(sceneClips).toHaveLength(3);
+
+    const assembled = await assembler.assemble(sceneClips, {
+      transitionStyle: "xfade",
+      transitionDurationSec,
+    });
+    const expectedTotalSec = TOTAL_SEC - 2 * transitionDurationSec;
+
+    expect(assembled.path).not.toBe(rawClip.path);
+    expect(assembled.durationMs).toBe(expectedTotalSec * 1000);
+    expect(assembled.scenes.at(-1)?.endMs).toBe(expectedTotalSec * 1000);
+
+    const outputDurationSec = await probeDurationSec(assembled.path);
+    if (Number.isNaN(outputDurationSec)) {
+      // ponytail: same environment-quirk fallback as the dip test above.
+      console.warn(
+        "[scene-split-assemble.integration] could not probe xfade output duration, skipping check",
+      );
+      return;
+    }
+    expect(Math.abs(outputDurationSec - expectedTotalSec)).toBeLessThanOrEqual(0.3);
   }, 30_000);
 });

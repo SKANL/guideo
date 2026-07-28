@@ -4,12 +4,16 @@
 // Phase 4 adapters may add zod validation at their own I/O boundary if/when needed.
 
 // The on-screen time range of one narration-scene inside the recorded clip. startMs/endMs are
-// cumulative elapsed milliseconds from the start of SCENE 0 (0-based), contiguous across scenes
-// (scene N's endMs === scene N+1's startMs; scene 0's startMs === 0). The login/overlay-dismiss
-// time before the first storyboard step is tracked separately on RawClip.preRollMs, NOT folded
-// into these ranges — see WebRecordingEngine.capture() and trim-preroll.ts (design doc section C:
-// the pre-roll trim removes that footage before the shown output, so effects/subtitles/audio,
-// all keyed to these 0-based ranges, stay aligned to the trimmed clip).
+// cumulative elapsed milliseconds from the start of SCENE 0 (0-based). With a duration-preserving
+// "dip" assembly these are CONTIGUOUS (scene N's endMs === scene N+1's startMs; scene 0's startMs
+// === 0). With an overlap-consuming "xfade" assembly (FfmpegSceneAssembler's default — see its
+// rebaseScenesXfade doc comment) consecutive ranges OVERLAP by exactly transitionDurationSec: scene
+// N's endMs > scene N+1's startMs during the crossfade window, since both scenes are genuinely
+// on-screen (blended) then. The login/overlay-dismiss time before the first storyboard step is
+// tracked separately on RawClip.preRollMs, NOT folded into these ranges — see
+// WebRecordingEngine.capture() and trim-preroll.ts (design doc section C: the pre-roll trim removes
+// that footage before the shown output, so effects/subtitles/audio, all keyed to these 0-based
+// ranges, stay aligned to the trimmed clip).
 export interface SceneRange {
   readonly narrationSegmentId: string;
   readonly startMs: number;

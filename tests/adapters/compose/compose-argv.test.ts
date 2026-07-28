@@ -142,6 +142,74 @@ describe("buildComposeArgv — argv-array process boundary safety", () => {
   });
 });
 
+describe("buildComposeArgv — audio placement at overlap-adjusted (xfade) scene starts", () => {
+  it("keeps the legacy concat filter when rawClip.scenes is empty (no timing info to compare against)", () => {
+    const argv = buildComposeArgv(baseParams, "subs.srt", "final.mp4");
+    expect(argv).toContain("[1:a]concat=n=1:v=0:a=1[aout]");
+  });
+
+  it("keeps the legacy concat filter when scenes are present but contiguous (dip mode, no overlap)", () => {
+    const params: ComposeParams = {
+      ...baseParams,
+      rawClip: {
+        ...baseParams.rawClip,
+        scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      },
+    };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+    expect(argv).toContain("[1:a]concat=n=1:v=0:a=1[aout]");
+  });
+
+  it("switches to per-track adelay + amix when a scene's real startMs overlaps the naive cumulative-duration sum (xfade mode)", () => {
+    const params: ComposeParams = {
+      ...baseParams,
+      rawClip: {
+        ...baseParams.rawClip,
+        scenes: [
+          { narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 },
+          { narrationSegmentId: "seg-2", startMs: 750, endMs: 1550 },
+        ],
+      },
+      audioTracks: [
+        { segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1000 },
+        { segmentId: "seg-2", path: "seg-2.mp3", durationMs: 800 },
+      ],
+    };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+    const filterComplex = argv[argv.indexOf("-filter_complex") + 1] as string;
+
+    expect(filterComplex).toBe(
+      "[1:a]anull[a0];[2:a]adelay=750:all=1[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
+    );
+    expect(argv.join(" ")).not.toMatch(/concat=n=\d+:v=0:a=1/);
+  });
+
+  it('applies the same overlap-adjusted placement in narration mode "voice" (audio muxed, no subtitle stream)', () => {
+    const params: ComposeParams = {
+      ...baseParams,
+      narration: "voice",
+      rawClip: {
+        ...baseParams.rawClip,
+        scenes: [
+          { narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 },
+          { narrationSegmentId: "seg-2", startMs: 750, endMs: 1550 },
+        ],
+      },
+      audioTracks: [
+        { segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1000 },
+        { segmentId: "seg-2", path: "seg-2.mp3", durationMs: 800 },
+      ],
+    };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+    const filterComplex = argv[argv.indexOf("-filter_complex") + 1] as string;
+
+    expect(filterComplex).toBe(
+      "[1:a]anull[a0];[2:a]adelay=750:all=1[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
+    );
+    expect(argv).not.toContain("subs.srt");
+  });
+});
+
 describe('buildComposeArgv — narration mode "voice" (audio, no subtitles)', () => {
   it("mixes audio but attaches no subtitle stream at all", () => {
     const params: ComposeParams = { ...baseParams, narration: "voice" };
