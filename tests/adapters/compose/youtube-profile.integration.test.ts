@@ -93,4 +93,27 @@ describe("YouTubeProfile (ffmpeg integration)", () => {
     const stats = await stat(finalVideo.path);
     expect(stats.size).toBeGreaterThan(0);
   }, 30_000);
+
+  it('narration "subtitles": composes a silent video with subtitles burned in (no audio, no TTS involved)', async (ctx) => {
+    if (!ffmpegAvailable) {
+      ctx.skip();
+      return;
+    }
+
+    const profile = new YouTubeProfile();
+    const outputPath = join(fixtureDir, "output-burned", "youtube.mp4");
+    const params: ComposeParams = {
+      rawClip,
+      audioTracks: [],
+      subtitles: [{ text: "Hello world.", startMs: 0, durationMs: 1000 }],
+      outputPath,
+      narration: "subtitles",
+    };
+
+    const finalVideo = await profile.compose(params);
+
+    expect(finalVideo.aspectRatio).toBe("16:9");
+    const stats = await stat(finalVideo.path);
+    expect(stats.size).toBeGreaterThan(0);
+  }, 30_000);
 });

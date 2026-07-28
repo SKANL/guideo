@@ -1,4 +1,5 @@
 import type { Audio, FinalVideo, RawClip, Subtitle } from "../models/media.js";
+import type { NarrationMode } from "../models/narration-mode.js";
 import type { Script } from "../models/script.js";
 import type { ApprovedStoryboard } from "../models/storyboard.js";
 import type { EffectsEngine } from "../ports/effects.js";
@@ -16,8 +17,14 @@ import { deriveSubtitles } from "./subtitles.js";
 // credentials should never appear in the shown video, and effects/audio/subtitles are keyed to
 // 0-based scene ranges that only line up once that footage is removed. A caller can opt OUT
 // (e.g. for debugging capture) by passing { trimPreRoll: false }.
+//
+// narration (narration-mode feature): "voice" | "subtitles" | "both", defaults to "both" — the
+// pre-narration-mode behavior (voice audio muxed in + soft subtitles attached). "subtitles" skips
+// voice synthesis entirely (no TTS call, no spend, no ElevenLabs quota needed) and paces capture
+// off each Script segment's own planned timing.durationMs instead of real audio duration.
 export interface RenderOptions {
   readonly trimPreRoll?: boolean;
+  readonly narration?: NarrationMode;
 }
 
 // RenderPorts: the subset of app/factory.ts's Container that the render pipeline needs. Declared
@@ -49,6 +56,11 @@ export interface RenderContext {
   readonly subtitles: readonly Subtitle[];
   readonly outputPath: string;
   readonly options: RenderOptions;
+  // Resolved once at render() init (options.narration ?? "both") — every stage reads this instead
+  // of re-deriving the default, so "which stages actually run TTS/produce subtitles" stays a
+  // single source of truth threaded through the same immutable-update context every other stage
+  // already folds over.
+  readonly narration: NarrationMode;
   // Set only by the terminal (compose) stage — render() reads this back out after folding every
   // stage, since PipelineStage.run() must always return a RenderContext, never a bare FinalVideo.
   readonly finalVideo: FinalVideo | null;
@@ -78,10 +90,22 @@ function requireClip(ctx: RenderContext, stageName: string): RawClip {
 // becomes that segment's target on-screen time, so CaptureStage can pace scenes to match. Segments
 // are synthesized SEQUENTIALLY, never overlapping — TTS providers cap concurrent requests
 // (ElevenLabs free tier = 2; fanning out all segments at once hit a 429).
+//
+// narration-mode gate: in "subtitles" mode this makes ZERO calls to VoiceGen.synthesize — no TTS
+// spend, unblocking local/CI validation runs with no ElevenLabs quota. audioTracks stays empty and
+// segmentDurationsMs falls back to each segment's own planned timing.durationMs (the LLM's
+// estimate), which is what CaptureStage paces scenes against either way — so capture pacing works
+// identically regardless of where the durations came from.
 class SynthesizeVoiceStage implements PipelineStage {
   readonly name = "synthesize-voice";
   constructor(private readonly voice: VoiceGen) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
+    if (ctx.narration === "subtitles") {
+      const segmentDurationsMs = new Map(
+        ctx.script.segments.map((segment) => [segment.id, segment.timing.durationMs]),
+      );
+      return { ...ctx, audioTracks: [], segmentDurationsMs };
+    }
     const audioTracks: Audio[] = [];
     for (const segment of ctx.script.segments) {
       audioTracks.push(await this.voice.synthesize(segment));
@@ -173,15 +197,22 @@ class SceneAssembleStage implements PipelineStage {
 }
 
 // Subtitles are derived purely from the (possibly cut+rebased) Script's known text plus each kept
-// segment's actual synthesized audio duration (no transcription, per spec).
+// segment's known duration (real synthesized audio in "voice"/"both", or the Script's own planned
+// timing in "subtitles" mode — see ctx.segmentDurationsMs; no transcription, per spec).
+//
+// narration-mode gate: "voice" mode produces NO subtitles at all (subtitles stays the initial
+// empty array) — the spec calls for voice-only output with nothing burned/attached.
 class DeriveSubtitlesStage implements PipelineStage {
   readonly name = "derive-subtitles";
   async run(ctx: RenderContext): Promise<RenderContext> {
-    return { ...ctx, subtitles: deriveSubtitles(ctx.script, ctx.audioTracks) };
+    if (ctx.narration === "voice") return ctx;
+    return { ...ctx, subtitles: deriveSubtitles(ctx.script, ctx.segmentDurationsMs) };
   }
 }
 
-// Terminal stage: compose() receives the ASSEMBLED clip (never the merely edited one).
+// Terminal stage: compose() receives the ASSEMBLED clip (never the merely edited one). narration
+// is forwarded explicitly so the compose adapter knows whether to mux audio, attach soft
+// subtitles, or burn them into a silent video — see platform-profile.ts's ComposeParams.
 class ComposeStage implements PipelineStage {
   readonly name = "compose";
   constructor(private readonly profile: PlatformProfile) {}
@@ -192,6 +223,7 @@ class ComposeStage implements PipelineStage {
       audioTracks: ctx.audioTracks,
       subtitles: ctx.subtitles,
       outputPath: ctx.outputPath,
+      narration: ctx.narration,
     });
     return { ...ctx, finalVideo };
   }
@@ -238,6 +270,7 @@ export async function render(
     subtitles: [],
     outputPath,
     options,
+    narration: options.narration ?? "both",
     finalVideo: null,
   };
   for (const stage of stages) {

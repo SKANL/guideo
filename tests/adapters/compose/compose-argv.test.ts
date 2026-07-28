@@ -134,4 +134,116 @@ describe("buildComposeArgv — argv-array process boundary safety", () => {
       "final.mp4",
     ]);
   });
+
+  it('defaults narration to "both" when unset (existing single-track behavior unchanged)', () => {
+    const argv = buildComposeArgv(baseParams, "subs.srt", "final.mp4");
+    expect(argv).toContain("mov_text");
+    expect(argv).toContain("aac");
+  });
+});
+
+describe('buildComposeArgv — narration mode "voice" (audio, no subtitles)', () => {
+  it("mixes audio but attaches no subtitle stream at all", () => {
+    const params: ComposeParams = { ...baseParams, narration: "voice" };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+
+    expect(argv).toEqual([
+      "-y",
+      "-i",
+      "clip.mp4",
+      "-i",
+      "seg-1.mp3",
+      "-filter_complex",
+      "[1:a]concat=n=1:v=0:a=1[aout]",
+      "-map",
+      "0:v",
+      "-map",
+      "[aout]",
+      "-c:v",
+      "libx264",
+      "-c:a",
+      "aac",
+      "-shortest",
+      "final.mp4",
+    ]);
+    expect(argv).not.toContain("subs.srt");
+    expect(argv).not.toContain("mov_text");
+  });
+});
+
+describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in captions)', () => {
+  it("produces a silent video (no audio input, no -c:a, -an) with burned-in subtitles", () => {
+    const params: ComposeParams = { ...baseParams, narration: "subtitles", audioTracks: [] };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+
+    expect(argv).toEqual([
+      "-y",
+      "-i",
+      "clip.mp4",
+      "-vf",
+      "subtitles='subs.srt'",
+      "-map",
+      "0:v",
+      "-c:v",
+      "libx264",
+      "-an",
+      "final.mp4",
+    ]);
+  });
+
+  it("does not error or emit an audio concat filter when audioTracks is empty", () => {
+    const params: ComposeParams = { ...baseParams, narration: "subtitles", audioTracks: [] };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+
+    expect(argv.join(" ")).not.toMatch(/concat/);
+    expect(argv).not.toContain("-c:a");
+    expect(argv).not.toContain("aac");
+    expect(argv).toContain("-an");
+  });
+
+  it("escapes ffmpeg subtitles-filter metacharacters (colon, backslash, quote) in the SRT path as one argv item", () => {
+    const trickyPath = "C:\\Users\\a b\\weird'name.srt";
+    const params: ComposeParams = { ...baseParams, narration: "subtitles", audioTracks: [] };
+    const argv = buildComposeArgv(params, trickyPath, "final.mp4");
+
+    const vfIndex = argv.indexOf("-vf");
+    expect(vfIndex).toBeGreaterThanOrEqual(0);
+    const vfValue = argv[vfIndex + 1] as string;
+    // Exactly one argv element carries the whole filter — never split by whitespace/metachars.
+    expect(argv.filter((arg) => arg?.startsWith("subtitles=")).length).toBe(1);
+    // The raw unescaped colon-drive-letter form must not appear verbatim (would break ffmpeg's
+    // own filter-option parser, which reads bare ':' as an option separator).
+    expect(vfValue).not.toContain("C:\\Users");
+    expect(vfValue).toContain("subtitles=");
+  });
+
+  it("neutralizes a leading-dash raw clip / output path the same way as other narration modes", () => {
+    const params: ComposeParams = {
+      ...baseParams,
+      narration: "subtitles",
+      audioTracks: [],
+      rawClip: { ...baseParams.rawClip, path: "-x.mp4" },
+    };
+    const argv = buildComposeArgv(params, "subs.srt", "-oevil.mp4");
+
+    expect(argv).not.toContain("-x.mp4");
+    expect(argv).not.toContain("-oevil.mp4");
+    expect(argv).toContain("./-x.mp4");
+    expect(argv.at(-1)).toBe("./-oevil.mp4");
+  });
+
+  it("passes a malicious rawClip path through as one literal argv item (never shell-interpolated)", () => {
+    const malicious = "clip.mp4; rm -rf ~ | $(touch pwned).mp4";
+    const params: ComposeParams = {
+      ...baseParams,
+      narration: "subtitles",
+      audioTracks: [],
+      rawClip: { ...baseParams.rawClip, path: malicious },
+    };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+
+    expect(argv).toContain(malicious);
+    expect(argv.filter((arg) => arg === malicious)).toHaveLength(1);
+    expect(argv).not.toContain("rm");
+  });
 });

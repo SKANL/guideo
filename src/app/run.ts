@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { parseBrief } from "../domain/models/brief.js";
+import { type NarrationMode, parseNarrationMode } from "../domain/models/narration-mode.js";
 import { runDiscover } from "./commands/discover.js";
 import { runPlan } from "./commands/plan.js";
 import { runRender } from "./commands/render.js";
@@ -14,12 +15,17 @@ Usage:
   guideo discover [--project <name>]              Discover the target app, write its flow graph
   guideo plan --brief "<idea>" [--platform youtube] [--project <name>]
                                                    Plan a script + storyboard, then STOP for review
-  guideo render --approve [--project <name>]      Render the last-planned, approved storyboard
+  guideo render --approve [--project <name>] [--narration <voice|subtitles|both>]
+                                                   Render the last-planned, approved storyboard
   guideo --help                                   Show this help
 
 Review gate: "plan" never captures the screen or synthesizes voice. Review the printed script +
 storyboard (and the files written under .guideo/), then run "guideo render --approve" only once
 you approve. "guideo render" without --approve always refuses — no capture or voice synthesis.
+
+Narration modes (--narration, default "both"): "voice" synthesizes narration audio and attaches
+no subtitles; "subtitles" skips voice synthesis entirely (no TTS spend) and burns subtitles into a
+silent video; "both" does voice audio + soft (toggleable) subtitles, same as pre-existing behavior.
 
 Projects: every command operates on one project's artifacts, stored under
 .guideo/projects/<project>/. --project defaults to a slug of GUIDEO_TARGET_URL's host (or
@@ -73,14 +79,26 @@ function parsePlanArgs(args: readonly string[]): {
   };
 }
 
-function parseRenderArgs(args: readonly string[]): { approve: boolean; project: string } {
+function parseRenderArgs(args: readonly string[]): {
+  approve: boolean;
+  project: string;
+  narration: NarrationMode;
+} {
   const { values } = parseArgs({
     args: [...args],
-    options: { approve: { type: "boolean" }, project: { type: "string" } },
+    options: {
+      approve: { type: "boolean" },
+      project: { type: "string" },
+      narration: { type: "string" },
+    },
     strict: true,
     allowPositionals: false,
   });
-  return { approve: values.approve ?? false, project: resolveProject(values.project) };
+  return {
+    approve: values.approve ?? false,
+    project: resolveProject(values.project),
+    narration: parseNarrationMode(values.narration ?? "both"),
+  };
 }
 
 // The testable dispatcher: command parsing + calling into the commands/ layer. Every side effect
@@ -119,9 +137,9 @@ export async function runCli(
         return 0;
       }
       case "render": {
-        const { approve, project } = parseRenderArgs(rest);
+        const { approve, project, narration } = parseRenderArgs(rest);
         const paths = projectPaths({ project, cwd });
-        const video = await runRender(container, approve, paths);
+        const video = await runRender(container, approve, paths, narration);
         print(`Final video written to ${video.path}`);
         return 0;
       }

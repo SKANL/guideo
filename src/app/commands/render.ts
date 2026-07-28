@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { FinalVideo } from "../../domain/models/media.js";
+import type { NarrationMode } from "../../domain/models/narration-mode.js";
 import { parseScript } from "../../domain/models/script.js";
 import { parseStoryboard } from "../../domain/models/storyboard.js";
 import { render } from "../../domain/pipeline/pipeline.js";
@@ -33,6 +34,7 @@ export async function runRender(
   },
   approve: boolean,
   paths: GuideoPaths = projectPaths({ project: "default" }),
+  narration: NarrationMode = "both",
 ): Promise<FinalVideo> {
   if (!approve) {
     throw new Error(
@@ -51,5 +53,5 @@ export async function runRender(
     );
   }
 
-  return render(container, approved, script, paths.outputPath);
+  return render(container, approved, script, paths.outputPath, { narration });
 }

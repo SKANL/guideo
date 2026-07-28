@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Audio } from "../../../src/domain/models/media.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import { deriveSubtitles } from "../../../src/domain/pipeline/subtitles.js";
 
@@ -11,20 +10,23 @@ const script = parseScript({
 });
 
 describe("deriveSubtitles", () => {
-  it("derives caption text from the Script (no transcription), timed to the actual audio duration", () => {
-    const audioTracks: Audio[] = [
-      { segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1600 },
-      { segmentId: "seg-2", path: "seg-2.mp3", durationMs: 1900 },
-    ];
-    const subtitles = deriveSubtitles(script, audioTracks);
+  it("derives caption text from the Script (no transcription), timed to the given per-segment duration", () => {
+    // Durations here stand in for RenderContext.segmentDurationsMs — populated from real
+    // synthesized audio in "voice"/"both" narration mode, or from the Script's own planned
+    // timing.durationMs in "subtitles" mode (no audio at all). deriveSubtitles doesn't care which.
+    const segmentDurationsMs = new Map([
+      ["seg-1", 1600],
+      ["seg-2", 1900],
+    ]);
+    const subtitles = deriveSubtitles(script, segmentDurationsMs);
     expect(subtitles).toEqual([
       { text: "Let's log in.", startMs: 0, durationMs: 1600 },
       { text: "Now invite a teammate.", startMs: 1500, durationMs: 1900 },
     ]);
   });
 
-  it("throws when a segment has no synthesized audio", () => {
-    const audioTracks: Audio[] = [{ segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1600 }];
-    expect(() => deriveSubtitles(script, audioTracks)).toThrow(/seg-2/);
+  it("throws when a segment has no known duration", () => {
+    const segmentDurationsMs = new Map([["seg-1", 1600]]);
+    expect(() => deriveSubtitles(script, segmentDurationsMs)).toThrow(/seg-2/);
   });
 });

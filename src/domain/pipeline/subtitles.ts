@@ -1,21 +1,25 @@
-import type { Audio, Subtitle } from "../models/media.js";
+import type { Subtitle } from "../models/media.js";
 import type { Script } from "../models/script.js";
 
 // Pure derivation, no I/O: caption text is already known from the Script segment (no audio
 // transcription, per spec's `subtitles` requirement). startMs anchors to the segment's own
-// planned timing; durationMs uses the synthesized Audio's actual duration (which may differ
-// from the Script's provisional estimate) so captions stay aligned to real narration timing.
-export function deriveSubtitles(script: Script, audioTracks: readonly Audio[]): Subtitle[] {
-  const audioBySegmentId = new Map(audioTracks.map((audio) => [audio.segmentId, audio]));
+// planned timing; durationMs comes from the caller's per-segment duration map — RenderContext's
+// segmentDurationsMs, which is the synthesized Audio's actual duration in "voice"/"both"
+// narration mode, or the Script's own planned timing.durationMs in "subtitles" mode (no audio
+// synthesized at all). deriveSubtitles doesn't need to know which — it just needs a duration.
+export function deriveSubtitles(
+  script: Script,
+  segmentDurationsMs: ReadonlyMap<string, number>,
+): Subtitle[] {
   return script.segments.map((segment) => {
-    const audio = audioBySegmentId.get(segment.id);
-    if (!audio) {
-      throw new Error(`No synthesized Audio for Script segment "${segment.id}"`);
+    const durationMs = segmentDurationsMs.get(segment.id);
+    if (durationMs === undefined) {
+      throw new Error(`No known duration for Script segment "${segment.id}"`);
     }
     return {
       text: segment.text,
       startMs: segment.timing.startMs,
-      durationMs: audio.durationMs,
+      durationMs,
     };
   });
 }

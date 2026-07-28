@@ -4,5 +4,6 @@ export * from "./brief.js";
 export * from "./effect.js";
 export * from "./flow-graph.js";
 export * from "./media.js";
+export * from "./narration-mode.js";
 export * from "./script.js";
 export * from "./storyboard.js";

@@ -289,6 +289,86 @@ describe("runCli", () => {
     expect(profile.composeCalls).toBe(0);
   });
 
+  it("render --approve rejects an invalid --narration value with a clear message, no spend", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-narration-invalid-"));
+    const cwd = scratchDir;
+    const { container, engine, voice, profile } = makeContainer();
+    const sink = makeSink();
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
+    await runCli(
+      ["plan", "--brief", "Show how to invite a teammate"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    const code = await runCli(
+      ["render", "--approve", "--narration", "captions"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    expect(code).toBe(1);
+    expect(sink.errLines.join("\n")).toMatch(/Invalid --narration value "captions"/);
+    expect(engine.captureCalls).toBe(0);
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(profile.composeCalls).toBe(0);
+  });
+
+  it("render --approve --narration subtitles never synthesizes voice and composes a silent, subtitled video", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-narration-subtitles-"));
+    const cwd = scratchDir;
+    const { container, engine, voice, profile } = makeContainer();
+    const sink = makeSink();
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
+    await runCli(
+      ["plan", "--brief", "Show how to invite a teammate"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    const code = await runCli(
+      ["render", "--approve", "--narration", "subtitles"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    expect(code).toBe(0);
+    expect(engine.captureCalls).toBe(1);
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(profile.composeCalls).toBe(1);
+    expect(profile.lastParams?.audioTracks).toEqual([]);
+    expect(profile.lastParams?.narration).toBe("subtitles");
+  });
+
+  it('render --approve without --narration defaults to "both" (voice + soft subtitles)', async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-narration-default-"));
+    const cwd = scratchDir;
+    const { container, voice, profile } = makeContainer();
+    const sink = makeSink();
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
+    await runCli(
+      ["plan", "--brief", "Show how to invite a teammate"],
+      container,
+      cwd,
+      sink.print,
+      sink.printErr,
+    );
+
+    const code = await runCli(["render", "--approve"], container, cwd, sink.print, sink.printErr);
+
+    expect(code).toBe(0);
+    expect(voice.synthesizeCalls).toBe(1);
+    expect(profile.lastParams?.narration).toBe("both");
+  });
+
   it("render --approve after a plan run renders through every spend adapter exactly once", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-test-"));
     const cwd = scratchDir;
