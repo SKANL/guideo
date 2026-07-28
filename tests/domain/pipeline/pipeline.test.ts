@@ -54,7 +54,13 @@ class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+    return {
+      path: "clip.mp4",
+      durationMs: 1500,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }],
+      preRollMs: 0,
+    };
   }
 }
 
@@ -681,6 +687,82 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     expect(profile.lastParams?.rawClip.path).toBe("edited.mp4");
     expect(profile.lastParams?.audioTracks).toBe(cutAudioTracks);
     expect(profile.lastParams?.subtitles).toEqual([{ text: "One.", startMs: 0, durationMs: 1000 }]);
+  });
+
+  // Regression (real e2e, live-confirmed): a subtitle for the "expedientes" scene showed while the
+  // "Importadores" page was still on screen — subtitles were timed off planned/synthesized audio
+  // durations (s1: 1000ms), but capture only paces UP to that target; click+navigation overshoot
+  // made the REAL on-screen scene 1300ms. That drift compounds, landing subtitles ~1 scene ahead.
+  // Fix: DeriveSubtitlesStage must read the ASSEMBLED clip's real scenes, not segmentDurationsMs.
+  it("aligns subtitles to the assembled clip's REAL scene ranges, not the planned/synthesized durations (regression: subtitles were ~1 scene ahead)", async () => {
+    const script = parseScript({
+      segments: [
+        { id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } },
+        { id: "s2", text: "Two.", timing: { startMs: 1000, durationMs: 1000 } },
+      ],
+    });
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "pause", narrationSegmentId: "s1" },
+        { action: "pause", narrationSegmentId: "s2" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    // Capture overshoots s1's planned/audio 1000ms target to a real 1300ms (e.g. slow
+    // click+navigation), pushing s2's real start to 1300ms instead of the planned 1000ms.
+    const engine: RecordingEngine = {
+      async capture(): Promise<RawClip> {
+        return {
+          path: "raw.mp4",
+          durationMs: 2600,
+          aspectRatio: "16:9",
+          scenes: [
+            { narrationSegmentId: "s1", startMs: 0, endMs: 1300 },
+            { narrationSegmentId: "s2", startMs: 1300, endMs: 2600 },
+          ],
+          preRollMs: 0,
+        };
+      },
+    };
+    const preRollTrimmer: PreRollTrimmer = {
+      async trim(clip: RawClip): Promise<RawClip> {
+        return clip;
+      },
+    };
+    const effectsEngine: EffectsEngine = {
+      async applyToScenes(_clip: RawClip, sceneClips: readonly SceneClip[]): Promise<SceneClip[]> {
+        return [...sceneClips];
+      },
+    };
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
+      approved,
+      script,
+      "final.mp4",
+    );
+
+    expect(profile.lastParams?.subtitles).toEqual([
+      { text: "One.", startMs: 0, durationMs: 1300 },
+      { text: "Two.", startMs: 1300, durationMs: 1300 },
+    ]);
   });
 
   it("never calls capture/synthesize when the storyboard is rejected", () => {

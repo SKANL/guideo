@@ -24,7 +24,11 @@ class FakeRecordingEngine implements RecordingEngine {
   ): Promise<RawClip> {
     this.captureCalls += 1;
     this.lastSegmentDurationsMs = segmentDurationsMs;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+    // Real capture paces the recorded scene to the target duration it was given (whether that
+    // target came from the Script's planned timing or synthesized audio) — subtitle timing must
+    // follow this ASSEMBLED real duration, not whatever target was originally passed to capture.
+    const durationMs = segmentDurationsMs.get("seg-1") ?? 1500;
+    return { path: "clip.mp4", durationMs, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
   }
 }
 

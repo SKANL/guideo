@@ -196,9 +196,12 @@ class SceneAssembleStage implements PipelineStage {
   }
 }
 
-// Subtitles are derived purely from the (possibly cut+rebased) Script's known text plus each kept
-// segment's known duration (real synthesized audio in "voice"/"both", or the Script's own planned
-// timing in "subtitles" mode — see ctx.segmentDurationsMs; no transcription, per spec).
+// Subtitles are derived from the (possibly cut+rebased) Script's known text, timed to the
+// ASSEMBLED clip's REAL per-scene ranges (clip.scenes) — NOT ctx.segmentDurationsMs (planned/audio
+// durations). Capture only paces UP to that planned target; click+navigation overshoot makes the
+// real on-screen scene longer, which used to drift subtitles ~1 scene ahead of the video. Running
+// this stage AFTER SceneAssembleStage (see defaultRenderStages below) is what makes ctx.rawClip's
+// scenes the final, real timing rather than a pre-assembly estimate.
 //
 // narration-mode gate: "voice" mode produces NO subtitles at all (subtitles stays the initial
 // empty array) — the spec calls for voice-only output with nothing burned/attached.
@@ -206,7 +209,8 @@ class DeriveSubtitlesStage implements PipelineStage {
   readonly name = "derive-subtitles";
   async run(ctx: RenderContext): Promise<RenderContext> {
     if (ctx.narration === "voice") return ctx;
-    return { ...ctx, subtitles: deriveSubtitles(ctx.script, ctx.segmentDurationsMs) };
+    const clip = requireClip(ctx, this.name);
+    return { ...ctx, subtitles: deriveSubtitles(ctx.script, clip.scenes) };
   }
 }
 

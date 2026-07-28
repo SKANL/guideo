@@ -10,23 +10,28 @@ const script = parseScript({
 });
 
 describe("deriveSubtitles", () => {
-  it("derives caption text from the Script (no transcription), timed to the given per-segment duration", () => {
-    // Durations here stand in for RenderContext.segmentDurationsMs — populated from real
-    // synthesized audio in "voice"/"both" narration mode, or from the Script's own planned
-    // timing.durationMs in "subtitles" mode (no audio at all). deriveSubtitles doesn't care which.
-    const segmentDurationsMs = new Map([
-      ["seg-1", 1600],
-      ["seg-2", 1900],
-    ]);
-    const subtitles = deriveSubtitles(script, segmentDurationsMs);
+  // Regression: subtitles used to be timed off a cumulative sum of PLANNED/audio segment
+  // durations, but capture only paces UP to that target — click+navigation makes a scene
+  // overshoot it, so the real on-screen scene runs longer than planned. That drift compounds
+  // across scenes, landing subtitles ~1 scene ahead of the video. Fix: time subtitles to the
+  // ASSEMBLED clip's REAL per-scene ranges instead.
+  it("times each subtitle to the matching scene's REAL [startMs,endMs], not a cumulative sum of planned durations", () => {
+    // Planned timing above says seg-1 ends at 1500ms, but the real assembled scene for seg-1
+    // overshot to 1800ms (pushing seg-2's real start to 1800ms too).
+    const scenes = [
+      { narrationSegmentId: "seg-1", startMs: 0, endMs: 1800 },
+      { narrationSegmentId: "seg-2", startMs: 1800, endMs: 3700 },
+    ];
+    const subtitles = deriveSubtitles(script, scenes);
     expect(subtitles).toEqual([
-      { text: "Let's log in.", startMs: 0, durationMs: 1600 },
-      { text: "Now invite a teammate.", startMs: 1500, durationMs: 1900 },
+      { text: "Let's log in.", startMs: 0, durationMs: 1800 },
+      { text: "Now invite a teammate.", startMs: 1800, durationMs: 1900 },
     ]);
   });
 
-  it("throws when a segment has no known duration", () => {
-    const segmentDurationsMs = new Map([["seg-1", 1600]]);
-    expect(() => deriveSubtitles(script, segmentDurationsMs)).toThrow(/seg-2/);
+  it("skips a segment with no matching scene (e.g. privacy-cut) instead of throwing", () => {
+    const scenes = [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }];
+    const subtitles = deriveSubtitles(script, scenes);
+    expect(subtitles).toEqual([{ text: "Let's log in.", startMs: 0, durationMs: 1500 }]);
   });
 });
