@@ -93,4 +93,26 @@ describe("StoryboardSchema", () => {
     const result = StoryboardSchema.safeParse(invalid);
     expect(result.success).toBe(false);
   });
+
+  it('defaults a step\'s visibility to "show" when omitted (existing storyboards still parse)', () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
+    });
+    expect(storyboard.steps[0]?.visibility).toBe("show");
+  });
+
+  it("parses a step explicitly marked private", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1", visibility: "private" }],
+    });
+    expect(storyboard.steps[0]?.visibility).toBe("private");
+  });
+
+  it("rejects a step with an invalid visibility value", () => {
+    const invalid = {
+      steps: [{ action: "pause", narrationSegmentId: "seg-1", visibility: "hidden" }],
+    };
+    const result = StoryboardSchema.safeParse(invalid);
+    expect(result.success).toBe(false);
+  });
 });

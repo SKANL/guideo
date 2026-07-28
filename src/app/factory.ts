@@ -7,6 +7,7 @@ import {
   ElevenLabsVoice,
   FfmpegEffectsEngine,
   FfmpegPreRollTrimmer,
+  FfmpegPrivacyCutter,
   UrlCredsTarget,
   WebRecordingEngine,
   YouTubeProfile,
@@ -14,6 +15,7 @@ import {
 import type { EffectsEngine } from "../domain/ports/effects.js";
 import type { PlatformProfile } from "../domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../domain/ports/preroll-trimmer.js";
+import type { PrivacyCutter } from "../domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../domain/ports/recording-engine.js";
 import type { ScriptGen } from "../domain/ports/script-gen.js";
 import type { Target } from "../domain/ports/target.js";
@@ -24,6 +26,7 @@ export interface Container {
   readonly scriptGen: ScriptGen;
   readonly recordingEngine: RecordingEngine;
   readonly preRollTrimmer: PreRollTrimmer;
+  readonly privacyCutter: PrivacyCutter;
   readonly effectsEngine: EffectsEngine;
   readonly voiceGen: VoiceGen;
   readonly platformProfile: PlatformProfile;
@@ -37,6 +40,7 @@ export function createContainer(overrides: Partial<Container> = {}): Container {
     scriptGen: overrides.scriptGen ?? new ClaudeAgentScriptGen(),
     recordingEngine: overrides.recordingEngine ?? new WebRecordingEngine(),
     preRollTrimmer: overrides.preRollTrimmer ?? new FfmpegPreRollTrimmer(),
+    privacyCutter: overrides.privacyCutter ?? new FfmpegPrivacyCutter(),
     effectsEngine: overrides.effectsEngine ?? new FfmpegEffectsEngine(),
     voiceGen: overrides.voiceGen ?? new ElevenLabsVoice(),
     platformProfile: overrides.platformProfile ?? new YouTubeProfile(),

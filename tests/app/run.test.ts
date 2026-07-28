@@ -8,13 +8,14 @@ import { projectPaths } from "../../src/app/paths.js";
 import { runCli } from "../../src/app/run.js";
 import type { FlowGraph } from "../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip } from "../../src/domain/models/media.js";
-import type { NarrationSegment } from "../../src/domain/models/script.js";
+import type { NarrationSegment, Script } from "../../src/domain/models/script.js";
 import { parseScript } from "../../src/domain/models/script.js";
 import type { ApprovedStoryboard } from "../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../src/domain/models/storyboard.js";
 import type { EffectsEngine } from "../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../src/domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../src/domain/ports/preroll-trimmer.js";
+import type { PrivacyCutResult, PrivacyCutter } from "../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../src/domain/ports/script-gen.js";
 import type { Target } from "../../src/domain/ports/target.js";
@@ -74,6 +75,19 @@ class FakeEffectsEngine implements EffectsEngine {
   }
 }
 
+class FakePrivacyCutter implements PrivacyCutter {
+  cutCalls = 0;
+  async cut(
+    clip: RawClip,
+    _storyboard: ApprovedStoryboard,
+    script: Script,
+    audioTracks: readonly Audio[],
+  ): Promise<PrivacyCutResult> {
+    this.cutCalls += 1;
+    return { clip, script, audioTracks };
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   synthesizeCalls = 0;
   async synthesize(segment: NarrationSegment): Promise<Audio> {
@@ -102,6 +116,7 @@ function makeContainer(): {
   scriptGen: FakeScriptGen;
   engine: FakeRecordingEngine;
   preRollTrimmer: FakePreRollTrimmer;
+  privacyCutter: FakePrivacyCutter;
   effectsEngine: FakeEffectsEngine;
   voice: FakeVoiceGen;
   profile: FakePlatformProfile;
@@ -110,6 +125,7 @@ function makeContainer(): {
   const scriptGen = new FakeScriptGen();
   const engine = new FakeRecordingEngine();
   const preRollTrimmer = new FakePreRollTrimmer();
+  const privacyCutter = new FakePrivacyCutter();
   const effectsEngine = new FakeEffectsEngine();
   const voice = new FakeVoiceGen();
   const profile = new FakePlatformProfile();
@@ -119,6 +135,7 @@ function makeContainer(): {
       scriptGen,
       recordingEngine: engine,
       preRollTrimmer,
+      privacyCutter,
       effectsEngine,
       voiceGen: voice,
       platformProfile: profile,
@@ -127,6 +144,7 @@ function makeContainer(): {
     scriptGen,
     engine,
     preRollTrimmer,
+    privacyCutter,
     effectsEngine,
     voice,
     profile,
@@ -355,6 +373,7 @@ describe("runCli", () => {
         scriptGen: new FakeScriptGen(),
         recordingEngine: new FakeRecordingEngine(),
         preRollTrimmer: new FakePreRollTrimmer(),
+        privacyCutter: new FakePrivacyCutter(),
         effectsEngine: new FakeEffectsEngine(),
         voiceGen: new FakeVoiceGen(),
         platformProfile: new FakePlatformProfile(),

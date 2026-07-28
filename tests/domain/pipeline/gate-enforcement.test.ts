@@ -2,14 +2,16 @@ import { describe, it } from "vitest";
 import { parseBrief } from "../../../src/domain/models/brief.js";
 import { parseFlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
-import type { NarrationSegment } from "../../../src/domain/models/script.js";
+import type { NarrationSegment, Script } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
+import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { render } from "../../../src/domain/pipeline/pipeline.js";
 import { plan } from "../../../src/domain/pipeline/planning.js";
 import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
+import type { PrivacyCutResult, PrivacyCutter } from "../../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
 import type { Target } from "../../../src/domain/ports/target.js";
@@ -63,6 +65,17 @@ class FakeEffectsEngine implements EffectsEngine {
   }
 }
 
+class FakePrivacyCutter implements PrivacyCutter {
+  async cut(
+    clip: RawClip,
+    _storyboard: ApprovedStoryboard,
+    script: Script,
+    audioTracks: readonly Audio[],
+  ): Promise<PrivacyCutResult> {
+    return { clip, script, audioTracks };
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   async synthesize(segment: NarrationSegment): Promise<Audio> {
     return {
@@ -85,6 +98,7 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
     const scriptGen = new FakeScriptGen();
     const engine = new FakeRecordingEngine();
     const preRollTrimmer = new FakePreRollTrimmer();
+    const privacyCutter = new FakePrivacyCutter();
     const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
@@ -95,6 +109,15 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
     // @ts-expect-error - render() requires ApprovedStoryboard; plan()'s Storyboard has not been
     // through ReviewGate.review() and cannot be minted here. This is the compile-time proof that
     // render(plan(...).storyboard) is unreachable without going through the REVIEW gate.
-    void render(storyboard, script, engine, preRollTrimmer, effectsEngine, voice, profile);
+    void render(
+      storyboard,
+      script,
+      engine,
+      preRollTrimmer,
+      privacyCutter,
+      effectsEngine,
+      voice,
+      profile,
+    );
   });
 });

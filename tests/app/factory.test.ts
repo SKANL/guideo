@@ -28,6 +28,8 @@ describe("createContainer", () => {
     expect(container.target).toBeDefined();
     expect(container.scriptGen).toBeDefined();
     expect(container.recordingEngine).toBeDefined();
+    expect(container.preRollTrimmer).toBeDefined();
+    expect(container.privacyCutter).toBeDefined();
     expect(container.effectsEngine).toBeDefined();
     expect(container.voiceGen).toBeDefined();
     expect(container.platformProfile).toBeDefined();

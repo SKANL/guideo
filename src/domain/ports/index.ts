@@ -1,8 +1,9 @@
 // Domain ports: Target, RecordingEngine, ScriptGen, VoiceGen, PlatformProfile, EffectsEngine,
-// PreRollTrimmer, Random.
+// PreRollTrimmer, PrivacyCutter, Random.
 export * from "./effects.js";
 export * from "./platform-profile.js";
 export * from "./preroll-trimmer.js";
+export * from "./privacy-cutter.js";
 export * from "./random.js";
 export * from "./recording-engine.js";
 export * from "./script-gen.js";

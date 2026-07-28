@@ -23,4 +23,6 @@ Each storyboard step may also carry proposed effects — these are suggestions f
 - "blur-region" — obscure a rectangle (e.g. hide sensitive-looking text) for a time range.
 Propose an effect only when the narration clearly calls for one (e.g. "notice this number" warrants a zoom-in on that element); leave most steps with no effects at all rather than over-decorating every step.
 
+Each storyboard step also carries a "visibility" (default "show"). You may mark a step "private" when its scene is obviously sensitive (e.g. a login/credentials screen) — a "private" scene is cut entirely from the produced video. This is only a suggestion: the human is expected to mark scenes private themselves by editing the storyboard at the REVIEW gate, so default to "show" unless a scene is clearly sensitive.
+
 Only use selectors and routes present in the provided flow-graph subset. Return structured output matching the provided JSON schema exactly.`;

@@ -6,13 +6,14 @@ import { ElevenLabsVoice } from "../../../src/adapters/voice/elevenlabs-voice.js
 import { runRender } from "../../../src/app/commands/render.js";
 import { projectPaths } from "../../../src/app/paths.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
-import type { NarrationSegment } from "../../../src/domain/models/script.js";
+import type { NarrationSegment, Script } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
+import type { PrivacyCutResult, PrivacyCutter } from "../../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
 
@@ -44,6 +45,19 @@ class FakeEffectsEngine implements EffectsEngine {
   async apply(clip: RawClip, _storyboard: ApprovedStoryboard): Promise<RawClip> {
     this.applyCalls += 1;
     return clip;
+  }
+}
+
+class FakePrivacyCutter implements PrivacyCutter {
+  cutCalls = 0;
+  async cut(
+    clip: RawClip,
+    _storyboard: ApprovedStoryboard,
+    script: Script,
+    audioTracks: readonly Audio[],
+  ): Promise<PrivacyCutResult> {
+    this.cutCalls += 1;
+    return { clip, script, audioTracks };
   }
 }
 
@@ -91,6 +105,7 @@ describe("runRender", () => {
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
     const preRollTrimmer = new FakePreRollTrimmer();
+    const privacyCutter = new FakePrivacyCutter();
     const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
@@ -100,6 +115,7 @@ describe("runRender", () => {
         {
           recordingEngine: engine,
           preRollTrimmer,
+          privacyCutter,
           effectsEngine,
           voiceGen: voice,
           platformProfile: profile,
@@ -120,6 +136,7 @@ describe("runRender", () => {
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
     const preRollTrimmer = new FakePreRollTrimmer();
+    const privacyCutter = new FakePrivacyCutter();
     const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
@@ -128,6 +145,7 @@ describe("runRender", () => {
       {
         recordingEngine: engine,
         preRollTrimmer,
+        privacyCutter,
         effectsEngine,
         voiceGen: voice,
         platformProfile: profile,
@@ -167,6 +185,7 @@ describe("runRender", () => {
       await writeApprovedFixtures(paths);
       const engine = new FakeRecordingEngine();
       const preRollTrimmer = new FakePreRollTrimmer();
+      const privacyCutter = new FakePrivacyCutter();
       const effectsEngine = new FakeEffectsEngine();
       const profile = new FakePlatformProfile();
       // Real ElevenLabsVoice, no injected client, no env key: throws before any network call.
@@ -177,6 +196,7 @@ describe("runRender", () => {
           {
             recordingEngine: engine,
             preRollTrimmer,
+            privacyCutter,
             effectsEngine,
             voiceGen: voice,
             platformProfile: profile,

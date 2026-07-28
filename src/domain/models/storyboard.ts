@@ -21,6 +21,12 @@ export const StepSchema = z
     // AI-proposed at Plan time (design doc section B); the human reviews/edits at the REVIEW gate.
     // Defaults to [] so storyboards authored before this field existed still parse unchanged.
     effects: z.array(EffectSchema).default([]),
+    // Privacy/redaction (design doc section C, sub-project 5b). "private" cuts this step's scene
+    // (every step sharing its narrationSegmentId) entirely from the composed output — see
+    // src/domain/pipeline/privacy-cut.ts. Primary path: the user marks this at the REVIEW gate by
+    // editing storyboard.json; ScriptGen may also propose it for obviously-sensitive scenes.
+    // Defaults to "show" so storyboards authored before this field existed still parse unchanged.
+    visibility: z.enum(["show", "private"]).default("show"),
   })
   .superRefine((step, ctx) => {
     if (SELECTOR_REQUIRED_ACTIONS.has(step.action) && !step.selector) {

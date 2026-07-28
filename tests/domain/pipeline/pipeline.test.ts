@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseBrief } from "../../../src/domain/models/brief.js";
 import { parseFlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip, Subtitle } from "../../../src/domain/models/media.js";
-import type { NarrationSegment } from "../../../src/domain/models/script.js";
+import type { NarrationSegment, Script } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
@@ -11,6 +11,7 @@ import { plan } from "../../../src/domain/pipeline/planning.js";
 import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
+import type { PrivacyCutResult, PrivacyCutter } from "../../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
 import type { Target } from "../../../src/domain/ports/target.js";
@@ -75,6 +76,23 @@ class FakeEffectsEngine implements EffectsEngine {
   }
 }
 
+// Passthrough by default (no scene is private in most tests below) — mirrors the real
+// FfmpegPrivacyCutter's no-op behavior.
+class FakePrivacyCutter implements PrivacyCutter {
+  cutCalls = 0;
+  lastArgs: { clip: RawClip; storyboard: ApprovedStoryboard; script: Script } | undefined;
+  async cut(
+    clip: RawClip,
+    storyboard: ApprovedStoryboard,
+    script: Script,
+    audioTracks: readonly Audio[],
+  ): Promise<PrivacyCutResult> {
+    this.cutCalls += 1;
+    this.lastArgs = { clip, storyboard, script };
+    return { clip, script, audioTracks };
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   synthesizeCalls = 0;
   async synthesize(segment: NarrationSegment): Promise<Audio> {
@@ -122,6 +140,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       script,
       engine,
       preRollTrimmer,
+      new FakePrivacyCutter(),
       effectsEngine,
       voice,
       profile,
@@ -178,6 +197,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       script,
       engine,
       preRollTrimmer,
+      new FakePrivacyCutter(),
       effectsEngine,
       voice,
       profile,
@@ -244,6 +264,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       script,
       engine,
       preRollTrimmer,
+      new FakePrivacyCutter(),
       effectsEngine,
       voice,
       profile,
@@ -305,6 +326,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       script,
       engine,
       preRollTrimmer,
+      new FakePrivacyCutter(),
       effectsEngine,
       voice,
       profile,
@@ -360,6 +382,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       script,
       engine,
       preRollTrimmer,
+      new FakePrivacyCutter(),
       effectsEngine,
       voice,
       profile,
@@ -412,6 +435,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       script,
       engine,
       preRollTrimmer,
+      new FakePrivacyCutter(),
       effectsEngine,
       voice,
       profile,
@@ -420,6 +444,163 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     );
 
     expect(preRollTrimmer.trimCalls).toBe(0);
+  });
+
+  // Privacy cut (design doc section C, sub-project 5b): the cut stage must run between the
+  // pre-roll trim and effects, and be a fast passthrough (no extra ffmpeg call, i.e. the fake's
+  // `cut` still runs but returns the SAME clip/script/audioTracks it was given) when no scene is
+  // private — the common case.
+  it("runs the privacy cut stage between trim and effects; it's a passthrough when nothing is private", async () => {
+    const script = parseScript({
+      segments: [{ id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } }],
+    });
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "s1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const events: string[] = [];
+    const engine: RecordingEngine = {
+      async capture(): Promise<RawClip> {
+        events.push("capture");
+        return { path: "raw.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+      },
+    };
+    const preRollTrimmer: PreRollTrimmer = {
+      async trim(clip: RawClip): Promise<RawClip> {
+        events.push("trim");
+        return clip;
+      },
+    };
+    const privacyCutter: PrivacyCutter = {
+      async cut(
+        clip: RawClip,
+        _storyboard: ApprovedStoryboard,
+        script: Script,
+        audioTracks: readonly Audio[],
+      ): Promise<PrivacyCutResult> {
+        events.push("privacy-cut");
+        expect(clip.path).toBe("raw.mp4");
+        return { clip, script, audioTracks };
+      },
+    };
+    const effectsEngine: EffectsEngine = {
+      async apply(clip: RawClip, sb: ApprovedStoryboard): Promise<RawClip> {
+        events.push("edit");
+        expect(clip.path).toBe("raw.mp4");
+        expect(sb).toBe(approved);
+        return { ...clip, path: "edited.mp4" };
+      },
+    };
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      privacyCutter,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
+
+    expect(events).toEqual(["capture", "trim", "privacy-cut", "edit"]);
+    expect(profile.composeCalls).toBe(1);
+    expect(profile.lastParams?.rawClip.path).toBe("edited.mp4");
+  });
+
+  // When a scene IS private, compose must receive the CUT clip/audioTracks (not the ones capture
+  // produced) and subtitles derived from the cut+rebased script.
+  it("when a scene is private, compose receives the cut clip, cut audioTracks, and re-derived subtitles", async () => {
+    const script = parseScript({
+      segments: [
+        { id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } },
+        { id: "s2", text: "Two (secret).", timing: { startMs: 1000, durationMs: 1000 } },
+      ],
+    });
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "pause", narrationSegmentId: "s1" },
+        { action: "pause", narrationSegmentId: "s2", visibility: "private" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const engine: RecordingEngine = {
+      async capture(): Promise<RawClip> {
+        return {
+          path: "raw.mp4",
+          durationMs: 2000,
+          aspectRatio: "16:9",
+          scenes: [
+            { narrationSegmentId: "s1", startMs: 0, endMs: 1000 },
+            { narrationSegmentId: "s2", startMs: 1000, endMs: 2000 },
+          ],
+          preRollMs: 0,
+        };
+      },
+    };
+    const preRollTrimmer: PreRollTrimmer = {
+      async trim(clip: RawClip): Promise<RawClip> {
+        return clip;
+      },
+    };
+    const cutScript: Script = {
+      segments: [{ id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } }],
+    };
+    const cutAudioTracks: Audio[] = [{ segmentId: "s1", path: "s1.mp3", durationMs: 1000 }];
+    const privacyCutter: PrivacyCutter = {
+      cutCalls: 0,
+      async cut(clip: RawClip): Promise<PrivacyCutResult> {
+        this.cutCalls += 1;
+        return {
+          clip: {
+            ...clip,
+            path: "cut.mp4",
+            scenes: [{ narrationSegmentId: "s1", startMs: 0, endMs: 1000 }],
+          },
+          script: cutScript,
+          audioTracks: cutAudioTracks,
+        };
+      },
+    } as PrivacyCutter & { cutCalls: number };
+    const effectsEngine: EffectsEngine = {
+      async apply(clip: RawClip): Promise<RawClip> {
+        expect(clip.path).toBe("cut.mp4");
+        return { ...clip, path: "edited.mp4" };
+      },
+    };
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      privacyCutter,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
+
+    expect(profile.lastParams?.rawClip.path).toBe("edited.mp4");
+    expect(profile.lastParams?.audioTracks).toBe(cutAudioTracks);
+    expect(profile.lastParams?.subtitles).toEqual([{ text: "One.", startMs: 0, durationMs: 1000 }]);
   });
 
   it("never calls capture/synthesize when the storyboard is rejected", () => {
