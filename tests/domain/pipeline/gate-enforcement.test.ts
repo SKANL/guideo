@@ -129,20 +129,20 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
 
     const { script, storyboard } = await plan(target, brief, scriptGen);
 
-    // @ts-expect-error - render() requires ApprovedStoryboard; plan()'s Storyboard has not been
-    // through ReviewGate.review() and cannot be minted here. This is the compile-time proof that
-    // render(plan(...).storyboard) is unreachable without going through the REVIEW gate.
-    void render(
-      storyboard,
-      script,
-      engine,
+    const ports = {
+      recordingEngine: engine,
       preRollTrimmer,
       privacyCutter,
       effectsEngine,
       sceneSplitter,
       sceneAssembler,
-      voice,
-      profile,
-    );
+      voiceGen: voice,
+      platformProfile: profile,
+    };
+
+    // @ts-expect-error - render() requires ApprovedStoryboard; plan()'s Storyboard has not been
+    // through ReviewGate.review() and cannot be minted here. This is the compile-time proof that
+    // render(plan(...).storyboard) is unreachable without going through the REVIEW gate.
+    void render(ports, storyboard, script, "final.mp4");
   });
 });

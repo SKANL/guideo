@@ -172,16 +172,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     if (approved === null) throw new Error("expected approval to mint an ApprovedStoryboard");
 
     const finalVideo = await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      new FakePrivacyCutter(),
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 
@@ -231,16 +233,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     };
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      new FakePrivacyCutter(),
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 
@@ -300,16 +304,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const profile = new FakePlatformProfile();
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      new FakePrivacyCutter(),
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 
@@ -364,16 +370,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const profile = new FakePlatformProfile();
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      new FakePrivacyCutter(),
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 
@@ -422,16 +430,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const profile = new FakePlatformProfile();
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      new FakePrivacyCutter(),
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 
@@ -477,16 +487,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const profile = new FakePlatformProfile();
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      new FakePrivacyCutter(),
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
       { trimPreRoll: false },
     );
@@ -549,16 +561,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const profile = new FakePlatformProfile();
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter,
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      privacyCutter,
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 
@@ -637,16 +651,18 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const profile = new FakePlatformProfile();
 
     await render(
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        privacyCutter,
+        effectsEngine,
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       approved,
       script,
-      engine,
-      preRollTrimmer,
-      privacyCutter,
-      effectsEngine,
-      new FakeSceneSplitter(),
-      new FakeSceneAssembler(),
-      voice,
-      profile,
       "final.mp4",
     );
 

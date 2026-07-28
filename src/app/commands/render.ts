@@ -51,17 +51,5 @@ export async function runRender(
     );
   }
 
-  return render(
-    approved,
-    script,
-    container.recordingEngine,
-    container.preRollTrimmer,
-    container.privacyCutter,
-    container.effectsEngine,
-    container.sceneSplitter,
-    container.sceneAssembler,
-    container.voiceGen,
-    container.platformProfile,
-    paths.outputPath,
-  );
+  return render(container, approved, script, paths.outputPath);
 }
