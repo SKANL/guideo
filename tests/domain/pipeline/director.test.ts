@@ -63,7 +63,8 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
       ],
     });
 
-    const result = applyDirectorDefaults(storyboard);
+    // Transitions are OFF by default (single-clip fade blacks the video); opt in to test them.
+    const result = applyDirectorDefaults(storyboard, { transitionsEnabled: true });
 
     expect(result.steps[0]?.effects).toContainEqual({
       type: "transition",
@@ -163,7 +164,11 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
       ],
     });
 
-    const result = applyDirectorDefaults(storyboard, { zoomLevel: 1.2, transitionDurationSec: 1 });
+    const result = applyDirectorDefaults(storyboard, {
+      zoomLevel: 1.2,
+      transitionDurationSec: 1,
+      transitionsEnabled: true,
+    });
 
     expect(result.steps[0]?.effects).toContainEqual({
       type: "zoom-in",

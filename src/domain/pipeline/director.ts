@@ -35,7 +35,12 @@ export const DEFAULT_DIRECTOR_CONFIG: DirectorConfig = {
   zoomDefaultsEnabled: true,
   zoomLevel: 1.12,
   zoomSceneInterval: 3,
-  transitionsEnabled: true,
+  // OFF by default: the `transition` effect is a single-clip `fade` (see effect-filter-builders),
+  // and ffmpeg's `fade=in:st=T` renders everything BEFORE T black — chaining one per scene boundary
+  // blacked out almost the whole video (real e2e). A correct boundary dip/crossfade needs per-scene
+  // clips composed with `xfade`, which this single continuous/cut clip doesn't have yet. Left
+  // available (opt-in) and wired, but not auto-applied until that per-scene-clip upgrade lands.
+  transitionsEnabled: false,
   transitionDurationSec: 0.5,
 };
 
