@@ -12,6 +12,7 @@ import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.j
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
+import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
 
@@ -26,7 +27,15 @@ class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
+    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+  }
+}
+
+class FakePreRollTrimmer implements PreRollTrimmer {
+  trimCalls = 0;
+  async trim(clip: RawClip): Promise<RawClip> {
+    this.trimCalls += 1;
+    return clip;
   }
 }
 
@@ -81,13 +90,20 @@ describe("runRender", () => {
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
+    const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
 
     await expect(
       runRender(
-        { recordingEngine: engine, effectsEngine, voiceGen: voice, platformProfile: profile },
+        {
+          recordingEngine: engine,
+          preRollTrimmer,
+          effectsEngine,
+          voiceGen: voice,
+          platformProfile: profile,
+        },
         false,
         paths,
       ),
@@ -103,12 +119,19 @@ describe("runRender", () => {
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
+    const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
 
     const video = await runRender(
-      { recordingEngine: engine, effectsEngine, voiceGen: voice, platformProfile: profile },
+      {
+        recordingEngine: engine,
+        preRollTrimmer,
+        effectsEngine,
+        voiceGen: voice,
+        platformProfile: profile,
+      },
       true,
       paths,
     );
@@ -143,6 +166,7 @@ describe("runRender", () => {
       const paths = projectPaths({ project: "test-project", cwd: scratchDir });
       await writeApprovedFixtures(paths);
       const engine = new FakeRecordingEngine();
+      const preRollTrimmer = new FakePreRollTrimmer();
       const effectsEngine = new FakeEffectsEngine();
       const profile = new FakePlatformProfile();
       // Real ElevenLabsVoice, no injected client, no env key: throws before any network call.
@@ -150,7 +174,13 @@ describe("runRender", () => {
 
       await expect(
         runRender(
-          { recordingEngine: engine, effectsEngine, voiceGen: voice, platformProfile: profile },
+          {
+            recordingEngine: engine,
+            preRollTrimmer,
+            effectsEngine,
+            voiceGen: voice,
+            platformProfile: profile,
+          },
           true,
           paths,
         ),

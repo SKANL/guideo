@@ -49,7 +49,7 @@ class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
+    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
   }
 }
 

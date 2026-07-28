@@ -114,18 +114,22 @@ export class WebRecordingEngine implements RecordingEngine {
   private readonly config: CaptureConfig;
   private readonly loginConfig: LoginConfig;
 
+  private readonly now: () => number;
+
   constructor(
     launcher?: CaptureBrowserLauncher,
     random: Random = new SeededRandom(Date.now()),
     humanFeel: Partial<HumanFeelConfig> = {},
     config: Partial<CaptureConfig> = {},
     loginConfig: Partial<LoginConfig> = {},
+    now: () => number = () => Date.now(),
   ) {
     this.injectedLauncher = launcher;
     this.random = random;
     this.humanFeel = { ...DEFAULT_HUMAN_FEEL_CONFIG, ...humanFeel };
     this.config = { ...DEFAULT_CAPTURE_CONFIG, ...config };
     this.loginConfig = { ...DEFAULT_LOGIN_CONFIG, ...loginConfig };
+    this.now = now;
   }
 
   async capture(
@@ -139,6 +143,11 @@ export class WebRecordingEngine implements RecordingEngine {
       const context = await browser.newContext({
         recordVideo: { dir: videoDir, size: this.config.viewport },
       });
+      // patchright/playwright starts recording video the moment the context is created — the
+      // real wall-clock time from here until scene 0's first action is genuine login/overlay-
+      // dismiss footage at the front of the raw video. Measured via the injectable clock (not the
+      // synthetic pacing sums below) so the pre-roll trim step can cut exactly that much.
+      const recordingStartMs = this.now();
 
       const page = await context.newPage();
       // Authenticate the SAME way discovery does (shared login.ts — see its bug-fix history)
@@ -146,10 +155,15 @@ export class WebRecordingEngine implements RecordingEngine {
       const env = readTargetEnvOrThrow();
       await login(page, env, this.loginConfig);
       // Real e2e finding: an onboarding/welcome dialog covers the nav right after login and
-      // intercepts every click's actionability check — clear it before driving any step. This
-      // wait counts toward the offset before scene 0 (see scenes below): login/overlay-dismiss
-      // time is on-screen time too, and every scene boundary must stay consistent with it.
-      let elapsedMs = await this.dismissOverlays(page);
+      // intercepts every click's actionability check — clear it before driving any step.
+      await this.dismissOverlays(page);
+      const preRollMs = Math.max(0, Math.round(this.now() - recordingStartMs));
+
+      // Scene ranges are 0-based relative to scene 0 (privacy/alignment fix — design doc section
+      // C): the login/overlay-dismiss time above is tracked ONLY via preRollMs, never folded into
+      // these ranges, so effects/subtitles/audio (keyed to scenes[*]) stay aligned once the
+      // pre-roll trim step removes that footage.
+      let elapsedMs = 0;
 
       let mousePosition = this.config.initialMousePosition;
       const scenes: SceneRange[] = [];
@@ -174,7 +188,7 @@ export class WebRecordingEngine implements RecordingEngine {
       await context.close();
       const path = video ? await video.path() : join(videoDir, "capture.webm");
 
-      return { path, durationMs: Math.round(elapsedMs), aspectRatio: "16:9", scenes };
+      return { path, durationMs: Math.round(elapsedMs), aspectRatio: "16:9", scenes, preRollMs };
     } finally {
       await browser.close();
     }

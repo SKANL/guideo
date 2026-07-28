@@ -514,7 +514,7 @@ describe("WebRecordingEngine", () => {
     expect(Math.abs(scene3.endMs - scene3.startMs - 2000)).toBeLessThanOrEqual(250);
   });
 
-  it("counts login/overlay-dismiss time as the offset before scene 0", async () => {
+  it("keeps scene 0 at startMs 0 regardless of login/overlay-dismiss time (privacy/alignment fix: scenes are 0-based)", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({
       steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
@@ -523,11 +523,66 @@ describe("WebRecordingEngine", () => {
     if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
 
     // dismissOverlays enabled (default: 2 presses * 300ms = 600ms) happens once after login,
-    // before scene 0 starts.
+    // before scene 0 starts — but that time must NOT offset scene 0 anymore (see preRollMs test
+    // below for where it's tracked instead).
     const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
     const clip = await engine.capture(approved, new Map([["seg-1", 3000]]));
 
-    expect(clip.scenes[0]?.startMs).toBe(600);
+    expect(clip.scenes[0]?.startMs).toBe(0);
+  });
+
+  // --- Real wall-clock pre-roll (design section C — privacy: trim login/overlay-dismiss before
+  // the shown output; the alignment bug: scenes must be 0-based, and the login footage's REAL
+  // duration must be tracked separately so the trim step can cut exactly that much). -----------
+
+  it("measures preRollMs as the injected clock's delta from recording start to the first scene's first action", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    // Deterministic fake clock: first call happens right after recording starts (context
+    // creation), second call right before scene 0's first action (after login + dismiss).
+    const clockValues = [1_000, 1_600];
+    let clockCalls = 0;
+    const now = () => clockValues[clockCalls++] ?? clockValues.at(-1) ?? 0;
+
+    const engine = new WebRecordingEngine(
+      harness.launcher,
+      new SeededRandom(1),
+      undefined,
+      undefined,
+      undefined,
+      now,
+    );
+    const clip = await engine.capture(approved, new Map([["seg-1", 3000]]));
+
+    expect(clip.preRollMs).toBe(600);
+    expect(clip.scenes[0]?.startMs).toBe(0);
+  });
+
+  it("defaults preRollMs to 0 when the clock reports no elapsed time before scene 0", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const now = () => 5_000;
+    const engine = new WebRecordingEngine(
+      harness.launcher,
+      new SeededRandom(1),
+      undefined,
+      undefined,
+      undefined,
+      now,
+    );
+    const clip = await engine.capture(approved, new Map([["seg-1", 3000]]));
+
+    expect(clip.preRollMs).toBe(0);
   });
 
   it("resolves click/hover selectors to the :visible match when a selector could match multiple elements", async () => {

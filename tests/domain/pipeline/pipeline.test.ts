@@ -10,6 +10,7 @@ import { render } from "../../../src/domain/pipeline/pipeline.js";
 import { plan } from "../../../src/domain/pipeline/planning.js";
 import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
+import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
 import type { Target } from "../../../src/domain/ports/target.js";
@@ -50,7 +51,17 @@ class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
+    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+  }
+}
+
+class FakePreRollTrimmer implements PreRollTrimmer {
+  trimCalls = 0;
+  lastArgs: { clip: RawClip; preRollMs: number } | undefined;
+  async trim(clip: RawClip, preRollMs: number): Promise<RawClip> {
+    this.trimCalls += 1;
+    this.lastArgs = { clip, preRollMs };
+    return { ...clip, path: `trimmed-${clip.path}`, preRollMs: 0 };
   }
 }
 
@@ -91,6 +102,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const target = new FakeTarget();
     const scriptGen = new FakeScriptGen();
     const engine = new FakeRecordingEngine();
+    const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
@@ -109,6 +121,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       approved,
       script,
       engine,
+      preRollTrimmer,
       effectsEngine,
       voice,
       profile,
@@ -128,6 +141,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
   // every segment at once hit a 429. Voice synthesis must be serialized (never overlapping).
   it("synthesizes voice segments sequentially, never overlapping calls", async () => {
     const engine = new FakeRecordingEngine();
+    const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine = new FakeEffectsEngine();
     const profile = new FakePlatformProfile();
     const script = parseScript({
@@ -159,7 +173,16 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       },
     };
 
-    await render(approved, script, engine, effectsEngine, voice, profile, "final.mp4");
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
 
     expect(maxInFlight).toBe(1);
   });
@@ -203,13 +226,29 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       ): Promise<RawClip> {
         events.push("capture:start");
         receivedDurations = segmentDurationsMs;
-        return { path: "clip.mp4", durationMs: 3000, aspectRatio: "16:9", scenes: [] };
+        return {
+          path: "clip.mp4",
+          durationMs: 3000,
+          aspectRatio: "16:9",
+          scenes: [],
+          preRollMs: 0,
+        };
       },
     };
+    const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine = new FakeEffectsEngine();
     const profile = new FakePlatformProfile();
 
-    await render(approved, script, engine, effectsEngine, voice, profile, "final.mp4");
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
 
     expect(events).toEqual(["voice:s1", "voice:s2", "capture:start"]);
     expect(receivedDurations).toEqual(
@@ -237,7 +276,13 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const engine: RecordingEngine = {
       async capture(): Promise<RawClip> {
         events.push("capture");
-        return { path: "raw.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [] };
+        return { path: "raw.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+      },
+    };
+    const preRollTrimmer: PreRollTrimmer = {
+      async trim(clip: RawClip): Promise<RawClip> {
+        events.push("trim");
+        return clip;
       },
     };
     const effectsEngine: EffectsEngine = {
@@ -255,11 +300,126 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     };
     const profile = new FakePlatformProfile();
 
-    await render(approved, script, engine, effectsEngine, voice, profile, "final.mp4");
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
 
-    expect(events).toEqual(["capture", "edit"]);
+    expect(events).toEqual(["capture", "trim", "edit"]);
     expect(profile.composeCalls).toBe(1);
     expect(profile.lastParams?.rawClip.path).toBe("edited.mp4");
+  });
+
+  // Privacy + alignment fix (design doc section C, sub-project 5a): the pre-roll trim must run
+  // BEFORE effects (whose scene ranges are 0-based, matching the TRIMMED clip), and must receive
+  // capture()'s real preRollMs. Gated by a `trimPreRoll` render option, default true.
+  it("trims the clip's real preRollMs before effects run, passing effects the trimmed clip", async () => {
+    const script = parseScript({
+      segments: [{ id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } }],
+    });
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "s1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const engine: RecordingEngine = {
+      async capture(): Promise<RawClip> {
+        return {
+          path: "raw.mp4",
+          durationMs: 1000,
+          aspectRatio: "16:9",
+          scenes: [],
+          preRollMs: 750,
+        };
+      },
+    };
+    const preRollTrimmer = new FakePreRollTrimmer();
+    const effectsEngine: EffectsEngine = {
+      async apply(clip: RawClip): Promise<RawClip> {
+        expect(clip.path).toBe("trimmed-raw.mp4");
+        expect(clip.preRollMs).toBe(0);
+        return clip;
+      },
+    };
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
+
+    expect(preRollTrimmer.trimCalls).toBe(1);
+    expect(preRollTrimmer.lastArgs?.preRollMs).toBe(750);
+    expect(preRollTrimmer.lastArgs?.clip.path).toBe("raw.mp4");
+  });
+
+  it("skips the pre-roll trim when trimPreRoll is false, passing the raw clip straight to effects", async () => {
+    const script = parseScript({
+      segments: [{ id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } }],
+    });
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "s1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const engine: RecordingEngine = {
+      async capture(): Promise<RawClip> {
+        return {
+          path: "raw.mp4",
+          durationMs: 1000,
+          aspectRatio: "16:9",
+          scenes: [],
+          preRollMs: 750,
+        };
+      },
+    };
+    const preRollTrimmer = new FakePreRollTrimmer();
+    const effectsEngine: EffectsEngine = {
+      async apply(clip: RawClip): Promise<RawClip> {
+        expect(clip.path).toBe("raw.mp4");
+        expect(clip.preRollMs).toBe(750);
+        return clip;
+      },
+    };
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(
+      approved,
+      script,
+      engine,
+      preRollTrimmer,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+      { trimPreRoll: false },
+    );
+
+    expect(preRollTrimmer.trimCalls).toBe(0);
   });
 
   it("never calls capture/synthesize when the storyboard is rejected", () => {

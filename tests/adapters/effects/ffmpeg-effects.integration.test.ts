@@ -44,6 +44,7 @@ beforeAll(async () => {
       durationMs: 2000,
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 }],
+      preRollMs: 0,
     };
     ffmpegAvailable = true;
   } catch (error) {

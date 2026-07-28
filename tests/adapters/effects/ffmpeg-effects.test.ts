@@ -22,6 +22,7 @@ describe("FfmpegEffectsEngine", () => {
       durationMs: 1000,
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      preRollMs: 0,
     };
     const approved = approve({ steps: [{ action: "pause", narrationSegmentId: "seg-1" }] });
 
@@ -37,7 +38,13 @@ describe("FfmpegEffectsEngine", () => {
       execCalls.push({ ffmpegPath, argv });
     });
     const scenes = [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }];
-    const clip: RawClip = { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9", scenes };
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 1000,
+      aspectRatio: "16:9",
+      scenes,
+      preRollMs: 0,
+    };
     const approved = approve({
       steps: [
         {

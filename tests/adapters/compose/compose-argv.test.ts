@@ -3,7 +3,7 @@ import { buildComposeArgv } from "../../../src/adapters/compose/compose-argv.js"
 import type { ComposeParams } from "../../../src/domain/ports/platform-profile.js";
 
 const baseParams: ComposeParams = {
-  rawClip: { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [] },
+  rawClip: { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [], preRollMs: 0 },
   audioTracks: [{ segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1000 }],
   subtitles: [{ text: "Let's log in.", startMs: 0, durationMs: 1000 }],
   outputPath: "final.mp4",

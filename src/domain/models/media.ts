@@ -4,9 +4,12 @@
 // Phase 4 adapters may add zod validation at their own I/O boundary if/when needed.
 
 // The on-screen time range of one narration-scene inside the recorded clip. startMs/endMs are
-// cumulative elapsed milliseconds from the start of the clip, contiguous across scenes (scene N's
-// endMs === scene N+1's startMs); the login/overlay-dismiss time before the first storyboard step
-// runs counts toward the offset before scene 0 (see WebRecordingEngine.capture()).
+// cumulative elapsed milliseconds from the start of SCENE 0 (0-based), contiguous across scenes
+// (scene N's endMs === scene N+1's startMs; scene 0's startMs === 0). The login/overlay-dismiss
+// time before the first storyboard step is tracked separately on RawClip.preRollMs, NOT folded
+// into these ranges — see WebRecordingEngine.capture() and trim-preroll.ts (design doc section C:
+// the pre-roll trim removes that footage before the shown output, so effects/subtitles/audio,
+// all keyed to these 0-based ranges, stay aligned to the trimmed clip).
 export interface SceneRange {
   readonly narrationSegmentId: string;
   readonly startMs: number;
@@ -18,6 +21,11 @@ export interface RawClip {
   readonly durationMs: number;
   readonly aspectRatio: "16:9";
   readonly scenes: readonly SceneRange[];
+  // Real wall-clock milliseconds recorded between the start of the video recording (context
+  // creation) and the first scene's first action — i.e. the login + overlay-dismiss footage at
+  // the front of the raw clip. Measured via an injectable clock (see WebRecordingEngine), not the
+  // synthetic pacing sums scenes[*] are built from. 0 when there was no measurable delay.
+  readonly preRollMs: number;
 }
 
 export interface Audio {

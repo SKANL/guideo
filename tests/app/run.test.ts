@@ -14,6 +14,7 @@ import type { ApprovedStoryboard } from "../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../src/domain/models/storyboard.js";
 import type { EffectsEngine } from "../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../src/domain/ports/platform-profile.js";
+import type { PreRollTrimmer } from "../../src/domain/ports/preroll-trimmer.js";
 import type { RecordingEngine } from "../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../src/domain/ports/script-gen.js";
 import type { Target } from "../../src/domain/ports/target.js";
@@ -55,7 +56,13 @@ class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
+    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+  }
+}
+
+class FakePreRollTrimmer implements PreRollTrimmer {
+  async trim(clip: RawClip): Promise<RawClip> {
+    return clip;
   }
 }
 
@@ -94,6 +101,7 @@ function makeContainer(): {
   target: FakeTarget;
   scriptGen: FakeScriptGen;
   engine: FakeRecordingEngine;
+  preRollTrimmer: FakePreRollTrimmer;
   effectsEngine: FakeEffectsEngine;
   voice: FakeVoiceGen;
   profile: FakePlatformProfile;
@@ -101,6 +109,7 @@ function makeContainer(): {
   const target = new FakeTarget();
   const scriptGen = new FakeScriptGen();
   const engine = new FakeRecordingEngine();
+  const preRollTrimmer = new FakePreRollTrimmer();
   const effectsEngine = new FakeEffectsEngine();
   const voice = new FakeVoiceGen();
   const profile = new FakePlatformProfile();
@@ -109,6 +118,7 @@ function makeContainer(): {
       target,
       scriptGen,
       recordingEngine: engine,
+      preRollTrimmer,
       effectsEngine,
       voiceGen: voice,
       platformProfile: profile,
@@ -116,6 +126,7 @@ function makeContainer(): {
     target,
     scriptGen,
     engine,
+    preRollTrimmer,
     effectsEngine,
     voice,
     profile,
@@ -343,6 +354,7 @@ describe("runCli", () => {
         target: new UrlCredsTarget(),
         scriptGen: new FakeScriptGen(),
         recordingEngine: new FakeRecordingEngine(),
+        preRollTrimmer: new FakePreRollTrimmer(),
         effectsEngine: new FakeEffectsEngine(),
         voiceGen: new FakeVoiceGen(),
         platformProfile: new FakePlatformProfile(),

@@ -18,6 +18,7 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
       durationMs: 1000,
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      preRollMs: 0,
     };
     const approved = approve({ steps: [{ action: "pause", narrationSegmentId: "seg-1" }] });
 
@@ -33,6 +34,7 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         { narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 },
         { narrationSegmentId: "seg-2", startMs: 1000, endMs: 3000 },
       ],
+      preRollMs: 0,
     };
     const approved = approve({
       steps: [
@@ -62,6 +64,7 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         { narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 },
         { narrationSegmentId: "seg-2", startMs: 2000, endMs: 4000 },
       ],
+      preRollMs: 0,
     };
     const approved = approve({
       steps: [
@@ -88,7 +91,13 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
 
   it("skips (logs + continues) a step whose narrationSegmentId has no matching scene on the clip", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const clip: RawClip = { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [] };
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 1000,
+      aspectRatio: "16:9",
+      scenes: [],
+      preRollMs: 0,
+    };
     const approved = approve({
       steps: [
         {
@@ -113,6 +122,7 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
       durationMs: 1000,
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
+      preRollMs: 0,
     };
     const approved = approve({
       steps: [
