@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildEffectsGraph } from "../../../src/adapters/effects/effects-graph.js";
+import { buildSceneEffectsGraph } from "../../../src/adapters/effects/effects-graph.js";
 import type { RawClip } from "../../../src/domain/models/media.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
+import type { SceneClip } from "../../../src/domain/ports/scene-splitter.js";
 import { review } from "../../../src/domain/review-gate.js";
 
 function approve(steps: Parameters<typeof parseStoryboard>[0]) {
@@ -11,8 +12,8 @@ function approve(steps: Parameters<typeof parseStoryboard>[0]) {
   return approved;
 }
 
-describe("buildEffectsGraph — maps AI-proposed per-step effects onto their scene time range", () => {
-  it("returns null when no step has any effects (fast passthrough signal)", () => {
+describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene's effects onto its OWN clip's whole timeline", () => {
+  it("returns null when the target scene has no effects (passthrough signal)", () => {
     const clip: RawClip = {
       path: "clip.mp4",
       durationMs: 1000,
@@ -20,12 +21,17 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
       preRollMs: 0,
     };
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-1",
+      path: "scene-0.mp4",
+      durationMs: 1000,
+    };
     const approved = approve({ steps: [{ action: "pause", narrationSegmentId: "seg-1" }] });
 
-    expect(buildEffectsGraph(clip, approved)).toBeNull();
+    expect(buildSceneEffectsGraph(clip, sceneClip, approved)).toBeNull();
   });
 
-  it("builds one filter_complex chain gated to the matching scene's [startMs,endMs] in seconds", () => {
+  it("builds one filter_complex chain gated to the SCENE CLIP's own [0, durationMs] timeline, not the original clip's scene range", () => {
     const clip: RawClip = {
       path: "clip.mp4",
       durationMs: 3000,
@@ -46,25 +52,110 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         },
       ],
     });
+    // seg-2's own scene clip is exactly 2s, starting at LOCAL time 0 (not 1s as it was on the
+    // shared/original clip's timeline).
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-2",
+      path: "scene-1.mp4",
+      durationMs: 2000,
+    };
 
-    const graph = buildEffectsGraph(clip, approved);
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
     expect(graph).not.toBeNull();
-    expect(graph?.filterComplex).toContain("enable='between(t,1,3)'");
+    expect(graph?.filterComplex).toContain("enable='between(t,0,2)'");
     expect(graph?.filterComplex).toContain("[0:v]split=2");
     expect(graph?.outputLabel).toBe("[v1]");
   });
 
-  it("chains multiple effects across multiple steps, threading each output label into the next input", () => {
+  it("only applies effects belonging to the target scene, ignoring other scenes' effects entirely (no warning)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const clip: RawClip = {
       path: "clip.mp4",
-      durationMs: 4000,
+      durationMs: 2000,
       aspectRatio: "16:9",
       scenes: [
-        { narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 },
-        { narrationSegmentId: "seg-2", startMs: 2000, endMs: 4000 },
+        { narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 },
+        { narrationSegmentId: "seg-2", startMs: 1000, endMs: 2000 },
       ],
       preRollMs: 0,
+    };
+    const approved = approve({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "zoom-in", params: {} }],
+        },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-2",
+      path: "scene-1.mp4",
+      durationMs: 1000,
+    };
+
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
+
+    expect(graph).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("chains multiple effects belonging to the same scene, threading each output label into the next input", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 2000,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 }],
+      preRollMs: 0,
+    };
+    const approved = approve({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [
+            { type: "zoom-in", params: {} },
+            { type: "blur-region", params: { x: 1, y: 2, w: 3, h: 4 } },
+          ],
+        },
+      ],
+    });
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-1",
+      path: "scene-0.mp4",
+      durationMs: 2000,
+    };
+
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
+
+    expect(graph?.filterComplex).toContain("[0:v]split=2[e1_base][e1_src]");
+    expect(graph?.filterComplex).toContain("[v1]split=2[e2_base][e2_src]");
+    expect(graph?.outputLabel).toBe("[v2]");
+  });
+
+  // --- Resolved regions: content-reframing is UNCHANGED by this relocation ------------------
+  // resolvedEffects stays POSITIONAL across the WHOLE original clip's storyboard.steps order (the
+  // same order WebRecordingEngine.capture() resolved them in) — buildSceneEffectsGraph must walk
+  // every step (advancing the position counter for skipped scenes too) to stay aligned, even
+  // though it only emits fragments for the target scene.
+
+  it("uses clip.resolvedEffects's region (captured selector target) even when earlier scenes' effects are skipped", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 2000,
+      aspectRatio: "16:9",
+      scenes: [
+        { narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 },
+        { narrationSegmentId: "seg-2", startMs: 1000, endMs: 2000 },
+      ],
+      preRollMs: 0,
+      resolvedEffects: [
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 5, y: 5, w: 10, h: 10 } },
+        { narrationSegmentId: "seg-2", type: "zoom-in", region: { x: 100, y: 40, w: 20, h: 20 } },
+      ],
     };
     const approved = approve({
       steps: [
@@ -76,77 +167,22 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         {
           action: "pause",
           narrationSegmentId: "seg-2",
-          effects: [{ type: "blur-region", params: { x: 1, y: 2, w: 3, h: 4 } }],
-        },
-      ],
-    });
-
-    const graph = buildEffectsGraph(clip, approved);
-
-    expect(graph?.filterComplex).toContain("[0:v]split=2[e1_base][e1_src]");
-    // second effect's fragment must consume the FIRST effect's output label as its input.
-    expect(graph?.filterComplex).toContain("[v1]split=2[e2_base][e2_src]");
-    expect(graph?.outputLabel).toBe("[v2]");
-  });
-
-  it("skips (logs + continues) a step whose narrationSegmentId has no matching scene on the clip", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const clip: RawClip = {
-      path: "clip.mp4",
-      durationMs: 1000,
-      aspectRatio: "16:9",
-      scenes: [],
-      preRollMs: 0,
-    };
-    const approved = approve({
-      steps: [
-        {
-          action: "pause",
-          narrationSegmentId: "no-such-scene",
           effects: [{ type: "zoom-in", params: {} }],
         },
       ],
     });
-
-    const graph = buildEffectsGraph(clip, approved);
-
-    expect(graph).toBeNull();
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
-  });
-
-  // --- Resolved regions (effects-overhaul Phase A: targeting) ------------------------------
-  // buildEffectsGraph must COMBINE the resolved region (from clip.resolvedEffects, captured while
-  // the target element was on screen) with the TIME gate (from clip.scenes) — this is the fix for
-  // effects always zooming the center regardless of the AI-proposed selector.
-
-  it("uses clip.resolvedEffects's region (captured selector target), centering zoom-in there instead of the frame", () => {
-    const clip: RawClip = {
-      path: "clip.mp4",
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-2",
+      path: "scene-1.mp4",
       durationMs: 1000,
-      aspectRatio: "16:9",
-      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
-      preRollMs: 0,
-      resolvedEffects: [
-        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 100, y: 40, w: 20, h: 20 } },
-      ],
     };
-    const approved = approve({
-      steps: [
-        {
-          action: "pause",
-          narrationSegmentId: "seg-1",
-          effects: [{ type: "zoom-in", params: {} }],
-        },
-      ],
-    });
 
-    const graph = buildEffectsGraph(clip, approved);
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
-    // center = x + w/2 = 110, y + h/2 = 50 — NOT the frame center (iw/2, ih/2).
+    // center = x + w/2 = 110, y + h/2 = 50 — seg-2's resolved region, NOT seg-1's (index 0) or the
+    // frame center.
     expect(graph?.filterComplex).toContain("x='110-");
     expect(graph?.filterComplex).toContain("y='50-");
-    expect(graph?.filterComplex).not.toContain("iw/2");
   });
 
   it("falls back to reading an explicit region straight from effect.params when clip.resolvedEffects is absent (back-compat)", () => {
@@ -156,7 +192,6 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }],
       preRollMs: 0,
-      // no resolvedEffects field at all
     };
     const approved = approve({
       steps: [
@@ -167,8 +202,13 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         },
       ],
     });
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-1",
+      path: "scene-0.mp4",
+      durationMs: 1000,
+    };
 
-    const graph = buildEffectsGraph(clip, approved);
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
     expect(graph?.filterComplex).toContain("drawbox=x=0:y=0:w=iw:h=20");
   });
@@ -191,8 +231,13 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         },
       ],
     });
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-1",
+      path: "scene-0.mp4",
+      durationMs: 1000,
+    };
 
-    const graph = buildEffectsGraph(clip, approved);
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
     expect(graph?.filterComplex).toContain("x='iw/2-");
   });
@@ -215,8 +260,13 @@ describe("buildEffectsGraph — maps AI-proposed per-step effects onto their sce
         },
       ],
     });
+    const sceneClip: SceneClip = {
+      narrationSegmentId: "seg-1",
+      path: "scene-0.mp4",
+      durationMs: 1000,
+    };
 
-    const graph = buildEffectsGraph(clip, approved);
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
     expect(graph).toBeNull();
     expect(warn).toHaveBeenCalled();

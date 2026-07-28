@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { buildEffectsGraph } from "../../../src/adapters/effects/effects-graph.js";
-import type { Audio, SceneRange } from "../../../src/domain/models/media.js";
+import { describe, expect, it } from "vitest";
+import { buildSceneEffectsGraph } from "../../../src/adapters/effects/effects-graph.js";
+import type { Audio, RawClip, SceneRange } from "../../../src/domain/models/media.js";
 import type { Script } from "../../../src/domain/models/script.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import {
@@ -8,6 +8,7 @@ import {
   planPrivacyCut,
   planSceneCut,
 } from "../../../src/domain/pipeline/privacy-cut.js";
+import type { SceneClip } from "../../../src/domain/ports/scene-splitter.js";
 import { review } from "../../../src/domain/review-gate.js";
 
 function approve(input: unknown) {
@@ -169,9 +170,8 @@ describe("planPrivacyCut — combines scene cut + kept/rebased script + kept aud
   });
 });
 
-describe("effects are re-gated to the rebased post-cut timeline (via buildEffectsGraph fed the cut clip.scenes)", () => {
-  it("excludes the private scene's effect and gates the kept scene's effect to its REBASED [startMs,endMs]", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+describe("effects are re-gated to each scene's OWN clip after privacy cut + split (via buildSceneEffectsGraph)", () => {
+  it("excludes the private scene's effect entirely, gating the kept scene's effect to ITS OWN scene clip's [0,duration] timeline", () => {
     const scenes: SceneRange[] = [
       { narrationSegmentId: "s1", startMs: 0, endMs: 1000 },
       { narrationSegmentId: "s2", startMs: 1000, endMs: 2000 },
@@ -193,27 +193,31 @@ describe("effects are re-gated to the rebased post-cut timeline (via buildEffect
     });
 
     const plan = planSceneCut(scenes, derivePrivateSegmentIds(approved.steps));
-    const cutClipScenes: SceneRange[] = plan.kept.map((k) => ({
-      narrationSegmentId: k.narrationSegmentId,
-      startMs: k.startMs,
-      endMs: k.endMs,
-    }));
+    const kept = plan.kept[0];
+    if (!kept) throw new Error("expected a kept scene");
 
-    const graph = buildEffectsGraph(
-      {
-        path: "cut.mp4",
-        durationMs: 1000,
-        aspectRatio: "16:9",
-        scenes: cutClipScenes,
-        preRollMs: 0,
-      },
-      approved,
-    );
+    const cutClip: RawClip = {
+      path: "cut.mp4",
+      durationMs: kept.endMs - kept.startMs,
+      aspectRatio: "16:9",
+      scenes: [
+        { narrationSegmentId: kept.narrationSegmentId, startMs: kept.startMs, endMs: kept.endMs },
+      ],
+      preRollMs: 0,
+    };
+    // Per-scene-clip architecture: s2's scene clip is its OWN standalone file, starting at LOCAL
+    // time 0 regardless of where it sat on the shared/cut clip's timeline.
+    const s2SceneClip: SceneClip = {
+      narrationSegmentId: kept.narrationSegmentId,
+      path: "scene-0.mp4",
+      durationMs: kept.endMs - kept.startMs,
+    };
 
-    // s2's scene was rebased from [1000,2000] to [0,1000]; s1's effect must be absent entirely.
+    const graph = buildSceneEffectsGraph(cutClip, s2SceneClip, approved);
+
+    // s1 (private, excluded from the cut entirely) never matches s2's scene clip; s2's own effect
+    // gates to its OWN [0,1] local timeline, never the original [1,2] shared-clip range.
     expect(graph?.filterComplex).toContain("enable='between(t,0,1)'");
     expect(graph?.filterComplex).not.toContain("between(t,1,2)");
-    expect(warn).toHaveBeenCalled(); // s1's effect was skipped: no matching scene on the cut clip.
-    warn.mockRestore();
   });
 });

@@ -206,8 +206,8 @@ export class WebRecordingEngine implements RecordingEngine {
       const scenes: SceneRange[] = [];
       // Effect targeting (effects-overhaul Phase A): resolved WHILE running each step, so the
       // target element is actually on screen — see resolveEffectRegion(). Accumulated in
-      // storyboard order across scenes so its positional index lines up with buildEffectsGraph's
-      // own iteration (see effects-graph.ts).
+      // storyboard order across scenes so its positional index lines up with
+      // buildSceneEffectsGraph's own iteration (see effects-graph.ts).
       const resolvedEffects: ResolvedEffect[] = [];
 
       for (const scene of groupIntoScenes(storyboard.steps)) {

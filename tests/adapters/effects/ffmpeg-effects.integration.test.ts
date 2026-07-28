@@ -8,24 +8,27 @@ import { resolveFfmpegPath } from "../../../src/adapters/compose/ffmpeg-path.js"
 import { FfmpegEffectsEngine } from "../../../src/adapters/effects/ffmpeg-effects.js";
 import type { RawClip } from "../../../src/domain/models/media.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
+import type { SceneClip } from "../../../src/domain/ports/scene-splitter.js";
 import { review } from "../../../src/domain/review-gate.js";
 
 const execFile = promisify(execFileCb);
 
 // Real integration test: actually invokes the resolved ffmpeg binary end-to-end, applying a real
-// blur-region effect over a time range on a tiny synthetic clip. Skipped (not failed) if ffmpeg
-// cannot run in this sandbox — the argv-safety + filter-builder unit tests remain the hard gate
-// regardless (same pattern as youtube-profile.integration.test.ts).
+// ANIMATED zoom-in effect gated to ONE synthetic scene clip's own timeline (per-scene-clip
+// architecture). Skipped (not failed) if ffmpeg cannot run in this sandbox — the argv-safety +
+// filter-builder + effects-graph unit tests remain the hard gate regardless (same pattern as
+// youtube-profile.integration.test.ts).
 let ffmpegAvailable = false;
 let fixtureDir: string;
 let rawClip: RawClip;
+let sceneClip: SceneClip;
 
 beforeAll(async () => {
   try {
     const ffmpegPath = resolveFfmpegPath();
-    fixtureDir = await mkdtemp(join(tmpdir(), "guideo-effects-fixture-"));
+    fixtureDir = await mkdtemp(join(tmpdir(), "guideo-scene-effects-fixture-"));
 
-    const clipPath = join(fixtureDir, "clip.mp4");
+    const scenePath = join(fixtureDir, "scene-0.mp4");
     await execFile(ffmpegPath, [
       "-y",
       "-f",
@@ -36,16 +39,19 @@ beforeAll(async () => {
       "libx264",
       "-pix_fmt",
       "yuv420p",
-      clipPath,
+      scenePath,
     ]);
 
+    // The pre-split RawClip is only consulted for storyboard/resolvedEffects context — its own
+    // `path` is never opened by applyToScenes (each scene clip's OWN path is).
     rawClip = {
-      path: clipPath,
+      path: "unused.mp4",
       durationMs: 2000,
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 }],
       preRollMs: 0,
     };
+    sceneClip = { narrationSegmentId: "seg-1", path: scenePath, durationMs: 2000 };
     ffmpegAvailable = true;
   } catch (error) {
     console.warn(`[ffmpeg-effects.integration] ffmpeg unavailable, skipping: ${String(error)}`);
@@ -59,34 +65,8 @@ afterAll(async () => {
   }
 });
 
-describe("FfmpegEffectsEngine (ffmpeg integration)", () => {
-  it("applies a real blur-region effect gated to the scene range and produces a valid non-empty video", async (ctx) => {
-    if (!ffmpegAvailable) {
-      ctx.skip();
-      return;
-    }
-
-    const engine = new FfmpegEffectsEngine();
-    const storyboard = parseStoryboard({
-      steps: [
-        {
-          action: "pause",
-          narrationSegmentId: "seg-1",
-          effects: [{ type: "blur-region", params: { x: 10, y: 10, w: 100, h: 60 } }],
-        },
-      ],
-    });
-    const approved = review(storyboard, { kind: "approved" });
-    if (approved === null) throw new Error("expected approval");
-
-    const edited = await engine.apply(rawClip, approved);
-
-    expect(edited.path).not.toBe(rawClip.path);
-    const stats = await stat(edited.path);
-    expect(stats.size).toBeGreaterThan(0);
-  }, 30_000);
-
-  it("applies a real ANIMATED zoom-in gated to a region and time range, producing a valid non-empty video (effects-overhaul Phase A)", async (ctx) => {
+describe("FfmpegEffectsEngine.applyToScenes (ffmpeg integration)", () => {
+  it("applies a real ANIMATED zoom-in gated to a region and to the scene clip's OWN timeline, producing a valid non-empty video", async (ctx) => {
     if (!ffmpegAvailable) {
       ctx.skip();
       return;
@@ -105,36 +85,13 @@ describe("FfmpegEffectsEngine (ffmpeg integration)", () => {
     const approved = review(storyboard, { kind: "approved" });
     if (approved === null) throw new Error("expected approval");
 
-    const edited = await engine.apply(rawClip, approved);
+    const [edited] = await engine.applyToScenes(rawClip, [sceneClip], approved);
 
-    expect(edited.path).not.toBe(rawClip.path);
-    const stats = await stat(edited.path);
-    expect(stats.size).toBeGreaterThan(0);
-  }, 30_000);
-
-  it("applies a real transition (boundary fade) over a synthetic clip, producing a valid non-empty video (effects-overhaul Phase B/C)", async (ctx) => {
-    if (!ffmpegAvailable) {
-      ctx.skip();
-      return;
-    }
-
-    const engine = new FfmpegEffectsEngine();
-    const storyboard = parseStoryboard({
-      steps: [
-        {
-          action: "pause",
-          narrationSegmentId: "seg-1",
-          effects: [{ type: "transition", params: { edge: "out", durationSec: 0.3 } }],
-        },
-      ],
-    });
-    const approved = review(storyboard, { kind: "approved" });
-    if (approved === null) throw new Error("expected approval");
-
-    const edited = await engine.apply(rawClip, approved);
-
-    expect(edited.path).not.toBe(rawClip.path);
-    const stats = await stat(edited.path);
+    expect(edited).toBeDefined();
+    expect(edited?.path).not.toBe(sceneClip.path);
+    expect(edited?.narrationSegmentId).toBe("seg-1");
+    expect(edited?.durationMs).toBe(2000);
+    const stats = await stat((edited as SceneClip).path);
     expect(stats.size).toBeGreaterThan(0);
   }, 30_000);
 });

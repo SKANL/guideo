@@ -1,9 +1,10 @@
-// Pure: maps an ApprovedStoryboard's per-step AI-proposed effects onto their step's scene time
-// range (matched via narrationSegmentId -> clip.scenes[*]) and threads them into ONE
-// filter_complex chain. No I/O, no process spawning — see ffmpeg-effects.ts for the adapter that
-// actually runs this graph through ffmpeg.
+// Pure: maps an ApprovedStoryboard's per-step AI-proposed effects onto a SINGLE scene clip's own
+// whole timeline (per-scene-clip architecture) and threads them into ONE filter_complex chain. No
+// I/O, no process spawning — see ffmpeg-effects.ts for the adapter that actually runs this graph
+// through ffmpeg.
 import type { EffectRegion, RawClip } from "../../domain/models/media.js";
 import type { ApprovedStoryboard } from "../../domain/models/storyboard.js";
+import type { SceneClip } from "../../domain/ports/scene-splitter.js";
 import { filterBuilderRegistry, regionFromParams } from "./effect-filter-builders.js";
 
 export interface EffectsGraph {
@@ -28,36 +29,40 @@ function resolveRegion(
   return regionFromParams(effect.params);
 }
 
-// Returns null when there is nothing to apply — either no step declared any effects, or every
-// declared effect turned out unmatched/unknown/malformed (each such case is logged and skipped,
-// never thrown) — the caller treats null as "run no ffmpeg, passthrough the input clip unchanged".
-export function buildEffectsGraph(
+// Returns null when there is nothing to apply to THIS scene — either no step in the whole
+// storyboard belongs to it and declares an effect, or every declared effect turned out unmatched/
+// unknown/malformed (each such case is logged and skipped, never thrown) — the caller treats null
+// as "run no ffmpeg, passthrough the scene clip unchanged".
+//
+// Per-scene-clip architecture: `sceneClip` is exactly one narration beat's OWN standalone file (see
+// scene-splitter.ts), so every matching effect gates over the WHOLE scene clip — [0, durationMs] on
+// ITS OWN local timeline, not the original shared clip's [startMs,endMs] range. The spatial target
+// (resolved region) is unchanged: still read positionally off `clip.resolvedEffects`, which stays
+// indexed across ALL of the ORIGINAL clip's storyboard.steps (the order WebRecordingEngine.capture()
+// resolved them in) — so this walks every step, advancing the position counter even for steps
+// belonging to OTHER scenes, to stay aligned.
+export function buildSceneEffectsGraph(
   clip: RawClip,
+  sceneClip: SceneClip,
   storyboard: ApprovedStoryboard,
 ): EffectsGraph | null {
-  const scenesBySegment = new Map(clip.scenes.map((scene) => [scene.narrationSegmentId, scene]));
+  const gate = { startSec: 0, endSec: sceneClip.durationMs / 1000 };
 
   const fragments: string[] = [];
   let currentLabel = "[0:v]";
   let uid = 0;
-  // Global positional index across ALL steps' effects, in storyboard order — must line up with
-  // clip.resolvedEffects regardless of whether a given step's scene is later found/skipped below.
+  // Global positional index across ALL of the original clip's steps' effects, in storyboard
+  // order — must line up with clip.resolvedEffects regardless of which scene a step belongs to.
   let effectIndex = -1;
 
   for (const step of storyboard.steps) {
     if (step.effects.length === 0) {
       continue;
     }
-    const scene = scenesBySegment.get(step.narrationSegmentId);
-    if (!scene) {
-      console.warn(
-        `[effects] skipping effects for step (segment "${step.narrationSegmentId}"): ` +
-          "no matching scene range on the clip.",
-      );
+    if (step.narrationSegmentId !== sceneClip.narrationSegmentId) {
       effectIndex += step.effects.length;
       continue;
     }
-    const gate = { startSec: scene.startMs / 1000, endSec: scene.endMs / 1000 };
 
     for (const effect of step.effects) {
       effectIndex += 1;

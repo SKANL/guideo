@@ -132,19 +132,7 @@ class PrivacyCutStage implements PipelineStage {
   }
 }
 
-// The Edit stage (design doc section B): runs effectsEngine.apply() on the CUT clip before
-// subtitles/compose, applying each step's AI-proposed effects time-gated to its scene range.
-class EffectsStage implements PipelineStage {
-  readonly name = "effects";
-  constructor(private readonly effects: EffectsEngine) {}
-  async run(ctx: RenderContext): Promise<RenderContext> {
-    const clip = requireClip(ctx, this.name);
-    const rawClip = await this.effects.apply(clip, ctx.approved);
-    return { ...ctx, rawClip };
-  }
-}
-
-// Per-scene-clip architecture (Phase 1), part 1/2: extracts the edited clip's scenes into
+// Per-scene-clip architecture (Phase 1), part 1/2: extracts the (cut) clip's scenes into
 // standalone per-scene files (see scene-splitter.ts).
 class SceneSplitStage implements PipelineStage {
   readonly name = "scene-split";
@@ -156,7 +144,22 @@ class SceneSplitStage implements PipelineStage {
   }
 }
 
-// Per-scene-clip architecture (Phase 1), part 2/2: recomposes the split scene clips into ONE clip
+// The Edit stage (design doc section B), relocated to run PER SCENE CLIP (per-scene-clip
+// architecture, completing Phase 1): runs AFTER the split, so each scene clip gets its own effects
+// gated within its OWN timeline rather than a shared/whole-clip one. `ctx.rawClip` here is still
+// the pre-split (cut) clip — needed for its `resolvedEffects` and the storyboard's effect params —
+// while `ctx.sceneClips` is what actually gets edited/replaced.
+class EffectsStage implements PipelineStage {
+  readonly name = "effects";
+  constructor(private readonly effects: EffectsEngine) {}
+  async run(ctx: RenderContext): Promise<RenderContext> {
+    const clip = requireClip(ctx, this.name);
+    const sceneClips = await this.effects.applyToScenes(clip, ctx.sceneClips, ctx.approved);
+    return { ...ctx, sceneClips };
+  }
+}
+
+// Per-scene-clip architecture (Phase 1), part 2/2: recomposes the (now edited) scene clips into ONE clip
 // with a duration-preserving dip transition at every boundary (see scene-assembler.ts). No overlap
 // between scenes means total duration is unchanged, so subtitles/audio (both keyed to the ORIGINAL
 // scene timing) stay aligned.
@@ -204,8 +207,8 @@ export function defaultRenderStages(ports: RenderPorts): PipelineStage[] {
     new CaptureStage(ports.recordingEngine),
     new TrimPreRollStage(ports.preRollTrimmer),
     new PrivacyCutStage(ports.privacyCutter),
-    new EffectsStage(ports.effectsEngine),
     new SceneSplitStage(ports.sceneSplitter),
+    new EffectsStage(ports.effectsEngine),
     new SceneAssembleStage(ports.sceneAssembler),
     new DeriveSubtitlesStage(),
     new ComposeStage(ports.platformProfile),

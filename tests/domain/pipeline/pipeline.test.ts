@@ -71,10 +71,14 @@ class FakePreRollTrimmer implements PreRollTrimmer {
 class FakeEffectsEngine implements EffectsEngine {
   applyCalls = 0;
   lastArgs: { clip: RawClip; storyboard: ApprovedStoryboard } | undefined;
-  async apply(clip: RawClip, storyboard: ApprovedStoryboard): Promise<RawClip> {
+  async applyToScenes(
+    clip: RawClip,
+    sceneClips: readonly SceneClip[],
+    storyboard: ApprovedStoryboard,
+  ): Promise<SceneClip[]> {
     this.applyCalls += 1;
     this.lastArgs = { clip, storyboard };
-    return { ...clip, path: `edited-${clip.path}` };
+    return sceneClips.map((sceneClip) => ({ ...sceneClip, path: `edited-${sceneClip.path}` }));
   }
 }
 
@@ -355,11 +359,15 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       },
     };
     const effectsEngine: EffectsEngine = {
-      async apply(clip: RawClip, sb: ApprovedStoryboard): Promise<RawClip> {
+      async applyToScenes(
+        clip: RawClip,
+        sceneClips: readonly SceneClip[],
+        sb: ApprovedStoryboard,
+      ): Promise<SceneClip[]> {
         events.push("edit");
         expect(clip.path).toBe("raw.mp4");
         expect(sb).toBe(approved);
-        return { ...clip, path: "edited.mp4" };
+        return sceneClips.map((sceneClip) => ({ ...sceneClip, path: "edited.mp4" }));
       },
     };
     const voice: VoiceGen = {
@@ -416,10 +424,10 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     };
     const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine: EffectsEngine = {
-      async apply(clip: RawClip): Promise<RawClip> {
+      async applyToScenes(clip: RawClip, sceneClips: readonly SceneClip[]): Promise<SceneClip[]> {
         expect(clip.path).toBe("trimmed-raw.mp4");
         expect(clip.preRollMs).toBe(0);
-        return clip;
+        return [...sceneClips];
       },
     };
     const voice: VoiceGen = {
@@ -473,10 +481,10 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     };
     const preRollTrimmer = new FakePreRollTrimmer();
     const effectsEngine: EffectsEngine = {
-      async apply(clip: RawClip): Promise<RawClip> {
+      async applyToScenes(clip: RawClip, sceneClips: readonly SceneClip[]): Promise<SceneClip[]> {
         expect(clip.path).toBe("raw.mp4");
         expect(clip.preRollMs).toBe(750);
-        return clip;
+        return [...sceneClips];
       },
     };
     const voice: VoiceGen = {
@@ -546,11 +554,15 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       },
     };
     const effectsEngine: EffectsEngine = {
-      async apply(clip: RawClip, sb: ApprovedStoryboard): Promise<RawClip> {
+      async applyToScenes(
+        clip: RawClip,
+        sceneClips: readonly SceneClip[],
+        sb: ApprovedStoryboard,
+      ): Promise<SceneClip[]> {
         events.push("edit");
         expect(clip.path).toBe("raw.mp4");
         expect(sb).toBe(approved);
-        return { ...clip, path: "edited.mp4" };
+        return sceneClips.map((sceneClip) => ({ ...sceneClip, path: "edited.mp4" }));
       },
     };
     const voice: VoiceGen = {
@@ -638,9 +650,9 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       },
     } as PrivacyCutter & { cutCalls: number };
     const effectsEngine: EffectsEngine = {
-      async apply(clip: RawClip): Promise<RawClip> {
+      async applyToScenes(clip: RawClip, sceneClips: readonly SceneClip[]): Promise<SceneClip[]> {
         expect(clip.path).toBe("cut.mp4");
-        return { ...clip, path: "edited.mp4" };
+        return sceneClips.map((sceneClip) => ({ ...sceneClip, path: "edited.mp4" }));
       },
     };
     const voice: VoiceGen = {

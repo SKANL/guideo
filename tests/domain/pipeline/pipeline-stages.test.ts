@@ -45,8 +45,8 @@ class FakePrivacyCutter implements PrivacyCutter {
 }
 
 class FakeEffectsEngine implements EffectsEngine {
-  async apply(clip: RawClip): Promise<RawClip> {
-    return clip;
+  async applyToScenes(_clip: RawClip, sceneClips: readonly SceneClip[]): Promise<SceneClip[]> {
+    return [...sceneClips];
   }
 }
 
@@ -168,8 +168,8 @@ describe("pipeline stage composition", () => {
       "capture",
       "trim-preroll",
       "privacy-cut",
-      "effects",
       "scene-split",
+      "effects",
       "scene-assemble",
       "derive-subtitles",
       "compose",

@@ -44,9 +44,13 @@ class FakePreRollTrimmer implements PreRollTrimmer {
 
 class FakeEffectsEngine implements EffectsEngine {
   applyCalls = 0;
-  async apply(clip: RawClip, _storyboard: ApprovedStoryboard): Promise<RawClip> {
+  async applyToScenes(
+    _clip: RawClip,
+    sceneClips: readonly SceneClip[],
+    _storyboard: ApprovedStoryboard,
+  ): Promise<SceneClip[]> {
     this.applyCalls += 1;
-    return clip;
+    return [...sceneClips];
   }
 }
 
