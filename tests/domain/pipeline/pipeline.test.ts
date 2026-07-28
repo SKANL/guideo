@@ -48,7 +48,7 @@ class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9" };
+    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
   }
 }
 
@@ -181,7 +181,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       ): Promise<RawClip> {
         events.push("capture:start");
         receivedDurations = segmentDurationsMs;
-        return { path: "clip.mp4", durationMs: 3000, aspectRatio: "16:9" };
+        return { path: "clip.mp4", durationMs: 3000, aspectRatio: "16:9", scenes: [] };
       },
     };
     const profile = new FakePlatformProfile();

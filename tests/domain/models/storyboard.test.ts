@@ -58,4 +58,39 @@ describe("StoryboardSchema", () => {
     const invalid = { steps: [{ action: "pause" }] };
     expect(() => parseStoryboard(invalid)).toThrow();
   });
+
+  it("defaults a step's effects to [] when omitted (existing storyboards still parse)", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
+    });
+    expect(storyboard.steps[0]?.effects).toEqual([]);
+  });
+
+  it("parses a step carrying AI-proposed effects", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "zoom",
+          selector: "#stat",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "zoom-in", params: { x: 1, y: 2 } }],
+        },
+      ],
+    });
+    expect(storyboard.steps[0]?.effects).toEqual([{ type: "zoom-in", params: { x: 1, y: 2 } }]);
+  });
+
+  it("rejects a step whose effect has an unknown type", () => {
+    const invalid = {
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "spin-360" }],
+        },
+      ],
+    };
+    const result = StoryboardSchema.safeParse(invalid);
+    expect(result.success).toBe(false);
+  });
 });

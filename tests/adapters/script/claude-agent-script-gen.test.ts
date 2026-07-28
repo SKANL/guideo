@@ -174,6 +174,48 @@ describe("ClaudeAgentScriptGen", () => {
     }
   });
 
+  // --- AI-proposed effects (design section B: AI proposes, human reviews at the gate) -------
+
+  it("hands the SDK a schema whose storyboard step effects carry the effect-type vocabulary", async () => {
+    const { fn, calls } = fakeQueryFn(validOutput);
+    const scriptGen = new ClaudeAgentScriptGen(fn);
+
+    await scriptGen.generate(brief, routes);
+
+    const schema = calls[0]?.options?.outputFormat?.schema;
+    expect(JSON.stringify(schema)).toContain("zoom-in");
+    expect(JSON.stringify(schema)).toContain("blur-region");
+  });
+
+  it("explains the available effect types in the system prompt as human-reviewable suggestions", () => {
+    expect(CONVERSATIONAL_NO_AI_TELLS_PROMPT).toMatch(/zoom-in/);
+    expect(CONVERSATIONAL_NO_AI_TELLS_PROMPT.toLowerCase()).toMatch(/suggest|review/);
+  });
+
+  it("validates and returns a storyboard whose steps carry AI-proposed effects", async () => {
+    const outputWithEffects = {
+      script: validOutput.script,
+      storyboard: {
+        steps: [
+          {
+            action: "click",
+            selector: "#invite",
+            narrationSegmentId: "seg-1",
+            effects: [{ type: "zoom-in", params: { x: 10, y: 20 } }],
+          },
+        ],
+      },
+    };
+    const { fn } = fakeQueryFn(outputWithEffects);
+    const scriptGen = new ClaudeAgentScriptGen(fn);
+
+    const result = await scriptGen.generate(brief, routes);
+
+    expect(result.storyboard.steps[0]?.effects).toEqual([
+      { type: "zoom-in", params: { x: 10, y: 20 } },
+    ]);
+  });
+
   it("passes a custom model through to the SDK query options when configured", async () => {
     const { fn, calls } = fakeQueryFn(validOutput);
     const scriptGen = new ClaudeAgentScriptGen(

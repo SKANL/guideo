@@ -13,7 +13,7 @@ describe("PlatformProfile port", () => {
   it("composes a raw clip, audio tracks, and subtitles into a FinalVideo", async () => {
     const profile: PlatformProfile = new FakeYouTubeProfile();
     const finalVideo = await profile.compose({
-      rawClip: { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9" },
+      rawClip: { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [] },
       audioTracks: [{ segmentId: "seg-1", path: "seg-1.mp3", durationMs: 1000 }],
       subtitles: [{ text: "Let's log in.", startMs: 0, durationMs: 1000 }],
       outputPath: "final.mp4",

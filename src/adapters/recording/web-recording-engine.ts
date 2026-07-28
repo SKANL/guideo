@@ -12,7 +12,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "patchright";
-import type { RawClip } from "../../domain/models/media.js";
+import type { RawClip, SceneRange } from "../../domain/models/media.js";
 import type { ApprovedStoryboard, StoryboardStep } from "../../domain/models/storyboard.js";
 import type { Random } from "../../domain/ports/random.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
@@ -146,13 +146,16 @@ export class WebRecordingEngine implements RecordingEngine {
       const env = readTargetEnvOrThrow();
       await login(page, env, this.loginConfig);
       // Real e2e finding: an onboarding/welcome dialog covers the nav right after login and
-      // intercepts every click's actionability check — clear it before driving any step.
-      await this.dismissOverlays(page);
+      // intercepts every click's actionability check — clear it before driving any step. This
+      // wait counts toward the offset before scene 0 (see scenes below): login/overlay-dismiss
+      // time is on-screen time too, and every scene boundary must stay consistent with it.
+      let elapsedMs = await this.dismissOverlays(page);
 
       let mousePosition = this.config.initialMousePosition;
-      let elapsedMs = 0;
+      const scenes: SceneRange[] = [];
 
       for (const scene of groupIntoScenes(storyboard.steps)) {
+        const startMs = Math.round(elapsedMs);
         const result = await this.runScene(
           page,
           scene,
@@ -161,6 +164,8 @@ export class WebRecordingEngine implements RecordingEngine {
         );
         mousePosition = result.mousePosition;
         elapsedMs += result.elapsedMs;
+        const endMs = Math.round(elapsedMs);
+        scenes.push({ narrationSegmentId: scene.narrationSegmentId, startMs, endMs });
       }
 
       const video = page.video();
@@ -169,7 +174,7 @@ export class WebRecordingEngine implements RecordingEngine {
       await context.close();
       const path = video ? await video.path() : join(videoDir, "capture.webm");
 
-      return { path, durationMs: Math.round(elapsedMs), aspectRatio: "16:9" };
+      return { path, durationMs: Math.round(elapsedMs), aspectRatio: "16:9", scenes };
     } finally {
       await browser.close();
     }
@@ -198,7 +203,7 @@ export class WebRecordingEngine implements RecordingEngine {
       elapsedMs += result.elapsedMs;
 
       // Same overlay can reappear (or a new one open) after a client-side route change.
-      if (step.action === "navigate") await this.dismissOverlays(page);
+      if (step.action === "navigate") elapsedMs += await this.dismissOverlays(page);
     }
 
     if (targetMs !== undefined) {
@@ -289,13 +294,17 @@ export class WebRecordingEngine implements RecordingEngine {
 
   // Presses `dismissKey` `dismissPresses` times, with a `dismissWaitMs` pause between presses, to
   // clear an onboarding/welcome overlay that would otherwise intercept every subsequent click. A
-  // no-op when `dismissOverlays` is disabled.
-  private async dismissOverlays(page: PatchrightCapturePage): Promise<void> {
-    if (!this.config.dismissOverlays) return;
+  // no-op (returns 0) when `dismissOverlays` is disabled. Returns the total ms waited so callers
+  // can fold it into scene-timing bookkeeping (see capture()/runScene()).
+  private async dismissOverlays(page: PatchrightCapturePage): Promise<number> {
+    if (!this.config.dismissOverlays) return 0;
+    let elapsedMs = 0;
     for (let i = 0; i < this.config.dismissPresses; i++) {
       await page.keyboard.press(this.config.dismissKey);
       await page.waitForTimeout(this.config.dismissWaitMs);
+      elapsedMs += this.config.dismissWaitMs;
     }
+    return elapsedMs;
   }
 
   private async typeText(page: PatchrightCapturePage, text: string): Promise<number> {

@@ -465,6 +465,71 @@ describe("WebRecordingEngine", () => {
     expect(clip.durationMs).toBeGreaterThan(0);
   });
 
+  // --- Per-scene time ranges (design section B — effects/edit stage needs this) ------------
+
+  it("returns contiguous, correctly-ordered scene ranges matching each scene's paced duration", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "pause", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+        { action: "pause", narrationSegmentId: "seg-3" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    // dismissOverlays disabled so every scene's paced duration is attributable purely to
+    // human-feel/pacing waits, not overlay-dismissal noise.
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1), undefined, {
+      dismissOverlays: false,
+    });
+    const segmentDurationsMs = new Map([
+      ["seg-1", 3000],
+      ["seg-2", 5000],
+      ["seg-3", 2000],
+    ]);
+
+    const clip = await engine.capture(approved, segmentDurationsMs);
+
+    expect(clip.scenes).toHaveLength(3);
+    const [scene1, scene2, scene3] = clip.scenes;
+    if (!scene1 || !scene2 || !scene3) throw new Error("expected 3 scenes");
+
+    // Ordered and matching the storyboard's narrationSegmentIds.
+    expect(scene1.narrationSegmentId).toBe("seg-1");
+    expect(scene2.narrationSegmentId).toBe("seg-2");
+    expect(scene3.narrationSegmentId).toBe("seg-3");
+
+    // Contiguous: each scene's endMs is exactly the next scene's startMs. First scene starts
+    // at the offset accrued before scene 0 (here 0, since login/overlay-dismiss both produce no
+    // tracked wait time in this harness/config).
+    expect(scene1.startMs).toBe(0);
+    expect(scene2.startMs).toBe(scene1.endMs);
+    expect(scene3.startMs).toBe(scene2.endMs);
+
+    // Each scene's own duration is paced to within the default timing slack of its target.
+    expect(Math.abs(scene1.endMs - scene1.startMs - 3000)).toBeLessThanOrEqual(250);
+    expect(Math.abs(scene2.endMs - scene2.startMs - 5000)).toBeLessThanOrEqual(250);
+    expect(Math.abs(scene3.endMs - scene3.startMs - 2000)).toBeLessThanOrEqual(250);
+  });
+
+  it("counts login/overlay-dismiss time as the offset before scene 0", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    // dismissOverlays enabled (default: 2 presses * 300ms = 600ms) happens once after login,
+    // before scene 0 starts.
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+    const clip = await engine.capture(approved, new Map([["seg-1", 3000]]));
+
+    expect(clip.scenes[0]?.startMs).toBe(600);
+  });
+
   it("resolves click/hover selectors to the :visible match when a selector could match multiple elements", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({

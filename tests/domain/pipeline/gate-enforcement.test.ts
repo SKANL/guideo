@@ -45,7 +45,7 @@ class FakeScriptGen implements ScriptGen {
 
 class FakeRecordingEngine implements RecordingEngine {
   async capture(): Promise<RawClip> {
-    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9" };
+    return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
   }
 }
 

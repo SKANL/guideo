@@ -6,7 +6,7 @@ import { review } from "../../src/domain/review-gate.js";
 
 class FakeRecordingEngine implements RecordingEngine {
   async capture(_storyboard: ApprovedStoryboard): Promise<RawClip> {
-    return { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9" };
+    return { path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [] };
   }
 }
 

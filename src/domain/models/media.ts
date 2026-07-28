@@ -3,10 +3,21 @@
 // produces them from untrusted input (no adapters yet), so there is no parse boundary to guard.
 // Phase 4 adapters may add zod validation at their own I/O boundary if/when needed.
 
+// The on-screen time range of one narration-scene inside the recorded clip. startMs/endMs are
+// cumulative elapsed milliseconds from the start of the clip, contiguous across scenes (scene N's
+// endMs === scene N+1's startMs); the login/overlay-dismiss time before the first storyboard step
+// runs counts toward the offset before scene 0 (see WebRecordingEngine.capture()).
+export interface SceneRange {
+  readonly narrationSegmentId: string;
+  readonly startMs: number;
+  readonly endMs: number;
+}
+
 export interface RawClip {
   readonly path: string;
   readonly durationMs: number;
   readonly aspectRatio: "16:9";
+  readonly scenes: readonly SceneRange[];
 }
 
 export interface Audio {

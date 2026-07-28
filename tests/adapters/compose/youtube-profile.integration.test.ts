@@ -51,7 +51,7 @@ beforeAll(async () => {
       audioPath,
     ]);
 
-    rawClip = { path: clipPath, durationMs: 1000, aspectRatio: "16:9" };
+    rawClip = { path: clipPath, durationMs: 1000, aspectRatio: "16:9", scenes: [] };
     audio = { segmentId: "seg-1", path: audioPath, durationMs: 1000 };
     ffmpegAvailable = true;
   } catch (error) {

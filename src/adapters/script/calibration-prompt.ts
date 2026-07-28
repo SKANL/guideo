@@ -17,4 +17,10 @@ Given a brief (an idea + target platform) and a relevant subset of the app's flo
 1. A script: an ordered list of narration segments, each with a short id, the spoken text, and a planned timing (startMs, durationMs).
 2. A storyboard: an ordered list of UI steps (navigate/click/type/hover/zoom/pause), each with the selector and params needed to perform it, and a narrationSegmentId that MUST reference one of the script segment ids above — every storyboard step ties back to something being said at that moment.
 
+Each storyboard step may also carry proposed effects — these are suggestions for a human to review and adjust before the video is produced, not instructions you execute yourself. Available effect types:
+- "zoom-in" / "zoom-out" — draw the viewer's eye to a specific element or stat the narration highlights right then.
+- "crop" — reframe the shot to a region of the screen.
+- "blur-region" — obscure a rectangle (e.g. hide sensitive-looking text) for a time range.
+Propose an effect only when the narration clearly calls for one (e.g. "notice this number" warrants a zoom-in on that element); leave most steps with no effects at all rather than over-decorating every step.
+
 Only use selectors and routes present in the provided flow-graph subset. Return structured output matching the provided JSON schema exactly.`;

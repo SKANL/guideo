@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EffectSchema } from "./effect.js";
 
 export const StepActionSchema = z.enum(["navigate", "click", "type", "hover", "zoom", "pause"]);
 export type StepAction = z.infer<typeof StepActionSchema>;
@@ -17,6 +18,9 @@ export const StepSchema = z
     selector: z.string().min(1).optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     narrationSegmentId: z.string().min(1),
+    // AI-proposed at Plan time (design doc section B); the human reviews/edits at the REVIEW gate.
+    // Defaults to [] so storyboards authored before this field existed still parse unchanged.
+    effects: z.array(EffectSchema).default([]),
   })
   .superRefine((step, ctx) => {
     if (SELECTOR_REQUIRED_ACTIONS.has(step.action) && !step.selector) {
