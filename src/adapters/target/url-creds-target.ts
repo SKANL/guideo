@@ -27,7 +27,12 @@ import type {
   PatchrightPage,
   UrlCredsEnv,
 } from "./login.js";
-import { login, normalizeUrl, readTargetEnvOrThrow } from "./login.js";
+import {
+  isExecutionContextDestroyedError,
+  login,
+  normalizeUrl,
+  readTargetEnvOrThrow,
+} from "./login.js";
 
 export type {
   BrowserLauncher,
@@ -82,17 +87,6 @@ function scopeSelectorList(container: string, selectorList: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Matches patchright/Playwright's error for the exact race this retries: a client-rendered SPA
-// triggers a late navigation/redirect right after goto() settles, destroying the execution
-// context the very next DOM query reads from. Intermittent — confirmed live (failed once,
-// succeeded on retry).
-const EXECUTION_CONTEXT_DESTROYED_RE = /execution context was destroyed|navigation/i;
-
-function isExecutionContextDestroyedError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return EXECUTION_CONTEXT_DESTROYED_RE.test(message);
 }
 
 // ponytail: feature/useCase tagging is a URL/text heuristic (first path segment = feature, page
@@ -182,7 +176,7 @@ export class UrlCredsTarget implements Target {
   }
 
   // Wraps findNavItems() with a bounded retry against the "Execution context was destroyed"
-  // navigation race (see EXECUTION_CONTEXT_DESTROYED_RE): a late SPA redirect right after crawl's
+  // navigation race (see login.ts's isExecutionContextDestroyedError): a late SPA redirect right after crawl's
   // goto() can invalidate the page's execution context before the $$ queries inside findNavItems
   // run. Each retry re-settles the page (re-goto its current URL, respecting gotoWaitUntil) before
   // querying again, so a subsequent attempt reads a fresh, stable context. Any other error is not

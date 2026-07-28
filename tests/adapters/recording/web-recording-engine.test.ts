@@ -30,7 +30,18 @@ function fakeElement(box: { x: number; y: number; width: number; height: number 
 // The fake page also tracks a mutable URL so the shared login() (see login.ts) can drive it: goto
 // sets the current URL, and submitting login transitions off it (unless `staysOnLogin`, which
 // simulates a stuck/failed login for the login-failure test).
-function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
+function fakeCaptureHarness(
+  options: {
+    staysOnLogin?: boolean;
+    // Test-only hook (click self-heal): selector -> URL the click "navigates" to, on top of the
+    // default submit-selector-only URL transition.
+    clickNavigatesTo?: Record<string, string>;
+    // Test-only hook (self-healing retries): selector -> error to throw for that exact click
+    // call, WITHOUT touching the login submit click (unlike a blanket click.mockImplementation
+    // override, which would also break login).
+    clickThrowsFor?: (selector: string) => Error | undefined;
+  } = {},
+) {
   const log: string[] = [];
   let currentUrl = "";
   const goto = vi.fn(async (url: string) => {
@@ -41,10 +52,17 @@ function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
     log.push(`fill:${selector}`);
   });
   const click = vi.fn(async (selector: string) => {
+    const throwErr = options.clickThrowsFor?.(selector);
+    if (throwErr) {
+      log.push(`click:${selector}:throws`);
+      throw throwErr;
+    }
     log.push(`click:${selector}`);
     if (selector === DEFAULT_LOGIN_CONFIG.submitSelector && !options.staysOnLogin) {
       currentUrl = LOGGED_IN_URL;
     }
+    const navigateTo = options.clickNavigatesTo?.[selector];
+    if (navigateTo) currentUrl = navigateTo;
   });
   const hover = vi.fn(async (selector: string) => {
     log.push(`hover:${selector}`);
@@ -116,6 +134,12 @@ function fakeCaptureHarness(options: { staysOnLogin?: boolean } = {}) {
     newContext,
     contextClose,
     browserClose,
+    // Test-only escape hatch to mutate the harness's tracked URL from outside — needed for the
+    // navigate-verification-retry test, where the FIRST goto() to a given URL must not "take"
+    // (simulating the live-render race) while a later one does.
+    setUrl: (url: string) => {
+      currentUrl = url;
+    },
   };
 }
 
@@ -601,5 +625,145 @@ describe("WebRecordingEngine", () => {
 
     expect(harness.click).toHaveBeenCalledWith('a[href="/x"]:visible');
     expect(harness.hover).toHaveBeenCalledWith('a[href="/y"]:visible');
+  });
+
+  // --- Self-healing capture (design section E) ----------------------------------------------
+
+  const CONTEXT_DESTROYED_MESSAGE =
+    "Execution context was destroyed, most likely because of a navigation.";
+
+  describe("Part A: bounded retry against execution-context-destroyed races", () => {
+    it("retries a page query once after a context-destroyed race, then succeeds", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$.mockImplementationOnce(async () => {
+        throw new Error(CONTEXT_DESTROYED_MESSAGE);
+      });
+      const storyboard = parseStoryboard({
+        steps: [{ action: "hover", selector: "#menu", narrationSegmentId: "seg-1" }],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(harness.$).toHaveBeenCalledTimes(2);
+      expect(harness.hover).toHaveBeenCalledWith("#menu:visible");
+      expect(clip.path).toBeTruthy();
+    });
+
+    it("bounds retries and degrades gracefully (no infinite loop) when a page query always races", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$.mockImplementation(async () => {
+        throw new Error(CONTEXT_DESTROYED_MESSAGE);
+      });
+      const storyboard = parseStoryboard({
+        steps: [{ action: "hover", selector: "#menu", narrationSegmentId: "seg-1" }],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      // Bounded: default stepRetries (2) => 3 total attempts, never unbounded.
+      expect(harness.$).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalled();
+      expect(clip.path).toBeTruthy();
+
+      warn.mockRestore();
+    });
+
+    it("logs a warning and skips a click step that can't be healed, without crashing the whole capture", async () => {
+      const harness = fakeCaptureHarness({
+        clickThrowsFor: (selector) =>
+          selector === "#a:visible" ? new Error(CONTEXT_DESTROYED_MESSAGE) : undefined,
+      });
+      const storyboard = parseStoryboard({
+        steps: [{ action: "click", selector: "#a", narrationSegmentId: "seg-1" }],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      // login submit click (1) + storyboard click's stepRetries(2)+1 bounded attempts (3) = 4.
+      expect(harness.click).toHaveBeenCalledTimes(4);
+      expect(warn).toHaveBeenCalled();
+      expect(clip.durationMs).toBeGreaterThanOrEqual(0);
+
+      warn.mockRestore();
+    });
+  });
+
+  describe("Part B: per-step verification + fallback", () => {
+    it("retries goto once when a navigate step's URL doesn't verify, then proceeds", async () => {
+      const harness = fakeCaptureHarness();
+      const targetUrl = "https://example.com/dashboard";
+      let targetGotoCalls = 0;
+      harness.goto.mockImplementation(async (url: string) => {
+        harness.log.push(`goto:${url}`);
+        if (url === targetUrl) {
+          targetGotoCalls++;
+          if (targetGotoCalls < 2) return; // first attempt doesn't take (simulates the live-render race)
+        }
+        harness.setUrl(url);
+      });
+      const storyboard = parseStoryboard({
+        steps: [{ action: "navigate", params: { url: targetUrl }, narrationSegmentId: "seg-1" }],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      const clip = await engine.capture(approved);
+
+      expect(targetGotoCalls).toBe(2);
+      expect(warn).toHaveBeenCalled();
+      expect(clip.path).toBeTruthy();
+
+      warn.mockRestore();
+    });
+
+    it("falls back to a direct goto when a nav-anchor click does not change the URL (self-heal)", async () => {
+      const harness = fakeCaptureHarness();
+      const storyboard = parseStoryboard({
+        steps: [{ action: "click", selector: 'a[href="/x"]', narrationSegmentId: "seg-1" }],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      await engine.capture(approved);
+
+      expect(harness.goto).toHaveBeenCalledWith("https://target.example.com/x", {
+        waitUntil: "networkidle",
+      });
+      expect(warn).toHaveBeenCalled();
+
+      warn.mockRestore();
+    });
+
+    it("does not fall back to goto when the nav-anchor click already changed the URL", async () => {
+      const harness = fakeCaptureHarness({
+        clickNavigatesTo: { 'a[href="/x"]:visible': "https://target.example.com/x" },
+      });
+      const storyboard = parseStoryboard({
+        steps: [{ action: "click", selector: 'a[href="/x"]', narrationSegmentId: "seg-1" }],
+      });
+      const approved = review(storyboard, { kind: "approved" });
+      if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      await engine.capture(approved);
+
+      // Only the login goto — no fallback goto for the click.
+      expect(harness.goto).toHaveBeenCalledTimes(1);
+    });
   });
 });

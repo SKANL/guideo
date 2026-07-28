@@ -29,6 +29,15 @@ export interface CaptureConfig {
   // — physical capture never hits an exact millisecond, so don't bother padding for a negligible
   // shortfall.
   readonly timingSlackMs: number;
+  // Self-healing capture (design doc section E): bounded retry for a page query/click/hover that
+  // races a client-rendered SPA's "Execution context was destroyed" navigation error (shared
+  // check: login.ts's isExecutionContextDestroyedError). Any other error is not this race and
+  // propagates immediately, unretried.
+  readonly stepRetries: number;
+  readonly stepRetryWaitMs: number;
+  // Bounded poll for a navigate step's URL (or a nav-anchor click's expected navigation) to
+  // actually change before the step is declared unverified and a retry/fallback kicks in.
+  readonly stepVerifyTimeoutMs: number;
 }
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
@@ -44,4 +53,7 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   navigateWaitUntil: "networkidle",
   minSceneMs: 800,
   timingSlackMs: 250,
+  stepRetries: 2,
+  stepRetryWaitMs: 300,
+  stepVerifyTimeoutMs: 2_000,
 };

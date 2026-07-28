@@ -17,7 +17,12 @@ import type { ApprovedStoryboard, StoryboardStep } from "../../domain/models/sto
 import type { Random } from "../../domain/ports/random.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
 import type { LoginConfig } from "../target/login.js";
-import { DEFAULT_LOGIN_CONFIG, login, readTargetEnvOrThrow } from "../target/login.js";
+import {
+  DEFAULT_LOGIN_CONFIG,
+  isExecutionContextDestroyedError,
+  login,
+  readTargetEnvOrThrow,
+} from "../target/login.js";
 import type { PatchrightElementHandle, PatchrightPage } from "../target/url-creds-target.js";
 import { type CaptureConfig, DEFAULT_CAPTURE_CONFIG } from "./capture-config.js";
 import { DEFAULT_HUMAN_FEEL_CONFIG, type HumanFeelConfig } from "./human-feel-config.js";
@@ -106,6 +111,16 @@ function requireSelector(step: StoryboardStep): string {
 function visibleSelector(selector: string): string {
   return `${selector}:visible`;
 }
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// Matches an exact `a[href="..."]` selector — the ONLY selector shape whose target URL is
+// staticaly recoverable without re-querying the (possibly gone) DOM, i.e. the shape
+// buildRobustSelector's href fallback produces (see url-creds-target.ts). This is what lets a
+// click self-heal fall back to a direct goto when the click itself didn't navigate.
+const ANCHOR_HREF_SELECTOR_RE = /^a\[href="([^"]*)"\]$/;
 
 export class WebRecordingEngine implements RecordingEngine {
   private readonly injectedLauncher: CaptureBrowserLauncher | undefined;
@@ -243,19 +258,26 @@ export class WebRecordingEngine implements RecordingEngine {
         // param key (url / route / href) — read all common variants rather than fail on an empty
         // goto (real e2e: a plan run put it under `route`, not `url`).
         const url = String(step.params?.url ?? step.params?.route ?? step.params?.href ?? "");
-        await page.goto(url, { waitUntil: this.config.navigateWaitUntil });
+        await this.navigateWithVerification(page, url);
         return { mousePosition, elapsedMs: 0 };
       }
       case "click": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
-        await page.click(visibleSelector(requireSelector(step)));
+        await this.performClick(page, requireSelector(step));
         return { mousePosition: target, elapsedMs: moveMs };
       }
       case "hover": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
-        await page.hover(visibleSelector(requireSelector(step)));
+        const selector = requireSelector(step);
+        try {
+          await this.withStepRetry(() => page.hover(visibleSelector(selector)), page);
+        } catch (err) {
+          console.warn(
+            `WebRecordingEngine: giving up hovering "${selector}" after retries — skipping this step. ${errorMessage(err)}`,
+          );
+        }
         return { mousePosition: target, elapsedMs: moveMs };
       }
       case "zoom": {
@@ -268,7 +290,7 @@ export class WebRecordingEngine implements RecordingEngine {
       case "type": {
         const target = await this.resolveCenter(page, step);
         const moveMs = await this.moveMouse(page, mousePosition, target);
-        await page.click(visibleSelector(requireSelector(step)));
+        await this.performClick(page, requireSelector(step));
         const typeMs = await this.typeText(page, String(step.params?.text ?? ""));
         return { mousePosition: target, elapsedMs: moveMs + typeMs };
       }
@@ -285,7 +307,14 @@ export class WebRecordingEngine implements RecordingEngine {
 
   private async resolveCenter(page: PatchrightCapturePage, step: StoryboardStep): Promise<Point> {
     const selector = visibleSelector(requireSelector(step));
-    const handle = await page.$(selector);
+    let handle: PatchrightCaptureElementHandle | null = null;
+    try {
+      handle = await this.withStepRetry(() => page.$(selector), page);
+    } catch (err) {
+      console.warn(
+        `WebRecordingEngine: giving up resolving "${selector}" after retries — falling back to viewport center. ${errorMessage(err)}`,
+      );
+    }
     const box = await handle?.boundingBox();
     if (!box) {
       // ponytail: element not found/not visible — fall back to viewport center rather than
@@ -293,6 +322,106 @@ export class WebRecordingEngine implements RecordingEngine {
       return { x: this.config.viewport.width / 2, y: this.config.viewport.height / 2 };
     }
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  }
+
+  // Self-healing capture (design section E) — bounded retry against the SAME "Execution context
+  // was destroyed" navigation race discovery hardens against (see login.ts's shared
+  // isExecutionContextDestroyedError). Capture clicks nav links constantly, so a page query/
+  // click/hover run right after a navigate step can race a late SPA redirect. Any OTHER error is
+  // not this race and propagates immediately, unretried — matches findNavItemsWithRetry's policy.
+  private async withStepRetry<T>(fn: () => Promise<T>, page: PatchrightCapturePage): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.config.stepRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (!isExecutionContextDestroyedError(err)) throw err;
+        lastError = err;
+        if (attempt >= this.config.stepRetries) break;
+        await page.waitForTimeout(this.config.stepRetryWaitMs);
+      }
+    }
+    throw lastError;
+  }
+
+  // Polls (bounded by timeoutMs/intervalMs, via page.waitForTimeout — never a real Node timer, so
+  // this stays fully fake-page-testable with no real wall-clock delay) for the URL to change away
+  // from beforeUrl. Used to verify both a navigate step's goto and a click step's expected
+  // navigation actually took.
+  private async waitForUrlChange(
+    page: PatchrightCapturePage,
+    beforeUrl: string,
+    timeoutMs: number,
+    intervalMs: number,
+  ): Promise<boolean> {
+    const attempts = Math.max(1, Math.ceil(timeoutMs / Math.max(1, intervalMs)));
+    for (let i = 0; i < attempts; i++) {
+      if (page.url() !== beforeUrl) return true;
+      await page.waitForTimeout(intervalMs);
+    }
+    return page.url() !== beforeUrl;
+  }
+
+  // Self-healing navigate (design section E): after goto() settles, verify the URL actually
+  // changed — a live render can race/swallow a navigation. One retry (re-goto) before degrading
+  // gracefully: this is one step of a multi-scene capture, so it logs and continues rather than
+  // crashing the whole render over a single unverified navigation.
+  private async navigateWithVerification(page: PatchrightCapturePage, url: string): Promise<void> {
+    const beforeUrl = page.url();
+    await page.goto(url, { waitUntil: this.config.navigateWaitUntil });
+    if (!url || url === beforeUrl) return;
+    const verifyArgs = [this.config.stepVerifyTimeoutMs, this.config.stepRetryWaitMs] as const;
+    if (await this.waitForUrlChange(page, beforeUrl, ...verifyArgs)) return;
+
+    console.warn(`WebRecordingEngine: navigate to "${url}" did not verify — retrying goto once.`);
+    await page.goto(url, { waitUntil: this.config.navigateWaitUntil });
+    if (!(await this.waitForUrlChange(page, beforeUrl, ...verifyArgs))) {
+      console.warn(
+        `WebRecordingEngine: navigate to "${url}" still did not verify after retry — continuing capture.`,
+      );
+    }
+  }
+
+  // Click self-heal (design section E): retries the click itself against the context-destroyed
+  // race (withStepRetry); if it never lands, logs and skips gracefully — one bad step doesn't
+  // crash the whole capture. If the click DID land but was for a plain `a[href="..."]` anchor
+  // whose click got intercepted (e.g. by a re-appearing overlay) rather than navigating, falls
+  // back to navigating there directly — the href is staticaly recoverable for exactly this
+  // selector shape (see ANCHOR_HREF_SELECTOR_RE).
+  private async performClick(page: PatchrightCapturePage, selector: string): Promise<void> {
+    const beforeUrl = page.url();
+    try {
+      await this.withStepRetry(() => page.click(visibleSelector(selector)), page);
+    } catch (err) {
+      console.warn(
+        `WebRecordingEngine: giving up clicking "${selector}" after retries — skipping this step. ${errorMessage(err)}`,
+      );
+      return;
+    }
+    await this.maybeHealAnchorClick(page, selector, beforeUrl);
+  }
+
+  private async maybeHealAnchorClick(
+    page: PatchrightCapturePage,
+    selector: string,
+    beforeUrl: string,
+  ): Promise<void> {
+    const match = ANCHOR_HREF_SELECTOR_RE.exec(selector);
+    if (!match) return;
+    const href = match[1] ?? "";
+    const changed = await this.waitForUrlChange(
+      page,
+      beforeUrl,
+      this.config.stepVerifyTimeoutMs,
+      this.config.stepRetryWaitMs,
+    );
+    if (changed) return;
+
+    const absoluteUrl = new URL(href, beforeUrl || page.url()).toString();
+    console.warn(
+      `WebRecordingEngine: click on "${selector}" did not navigate — falling back to goto("${absoluteUrl}").`,
+    );
+    await page.goto(absoluteUrl, { waitUntil: this.config.navigateWaitUntil });
   }
 
   private async moveMouse(page: PatchrightCapturePage, from: Point, to: Point): Promise<number> {
@@ -314,7 +443,14 @@ export class WebRecordingEngine implements RecordingEngine {
     if (!this.config.dismissOverlays) return 0;
     let elapsedMs = 0;
     for (let i = 0; i < this.config.dismissPresses; i++) {
-      await page.keyboard.press(this.config.dismissKey);
+      try {
+        await this.withStepRetry(() => page.keyboard.press(this.config.dismissKey), page);
+      } catch (err) {
+        console.warn(
+          `WebRecordingEngine: giving up dismissing overlay via "${this.config.dismissKey}" after retries — ${errorMessage(err)}`,
+        );
+        break;
+      }
       await page.waitForTimeout(this.config.dismissWaitMs);
       elapsedMs += this.config.dismissWaitMs;
     }

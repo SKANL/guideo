@@ -126,6 +126,18 @@ export function normalizeUrl(url: string): string {
   return `${parsed.origin}${parsed.pathname}`;
 }
 
+// Matches patchright/Playwright's error for the exact race that a client-rendered SPA's late
+// navigation/redirect can trigger right after a goto() settles or a click navigates — destroying
+// the execution context the very next DOM query/interaction reads from. Shared by discovery
+// (UrlCredsTarget's findNavItemsWithRetry) and capture (WebRecordingEngine's self-healing retries)
+// — a hard-won fix here benefits both instead of being re-derived/duplicated per adapter.
+const EXECUTION_CONTEXT_DESTROYED_RE = /execution context was destroyed|navigation/i;
+
+export function isExecutionContextDestroyedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return EXECUTION_CONTEXT_DESTROYED_RE.test(message);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
