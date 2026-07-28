@@ -15,6 +15,8 @@ import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/p
 import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
 import type { PrivacyCutResult, PrivacyCutter } from "../../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
+import type { SceneAssembler } from "../../../src/domain/ports/scene-assembler.js";
+import type { SceneClip, SceneSplitter } from "../../../src/domain/ports/scene-splitter.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
 
 const script = parseScript({
@@ -58,6 +60,25 @@ class FakePrivacyCutter implements PrivacyCutter {
   ): Promise<PrivacyCutResult> {
     this.cutCalls += 1;
     return { clip, script, audioTracks };
+  }
+}
+
+class FakeSceneSplitter implements SceneSplitter {
+  async split(clip: RawClip): Promise<SceneClip[]> {
+    return [{ narrationSegmentId: "", path: clip.path, durationMs: clip.durationMs }];
+  }
+}
+
+class FakeSceneAssembler implements SceneAssembler {
+  async assemble(sceneClips: readonly SceneClip[]): Promise<RawClip> {
+    const only = sceneClips[0] as SceneClip;
+    return {
+      path: only.path,
+      durationMs: only.durationMs,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: only.narrationSegmentId, startMs: 0, endMs: only.durationMs }],
+      preRollMs: 0,
+    };
   }
 }
 
@@ -107,6 +128,8 @@ describe("runRender", () => {
     const preRollTrimmer = new FakePreRollTrimmer();
     const privacyCutter = new FakePrivacyCutter();
     const effectsEngine = new FakeEffectsEngine();
+    const sceneSplitter = new FakeSceneSplitter();
+    const sceneAssembler = new FakeSceneAssembler();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
 
@@ -117,6 +140,8 @@ describe("runRender", () => {
           preRollTrimmer,
           privacyCutter,
           effectsEngine,
+          sceneSplitter,
+          sceneAssembler,
           voiceGen: voice,
           platformProfile: profile,
         },
@@ -138,6 +163,8 @@ describe("runRender", () => {
     const preRollTrimmer = new FakePreRollTrimmer();
     const privacyCutter = new FakePrivacyCutter();
     const effectsEngine = new FakeEffectsEngine();
+    const sceneSplitter = new FakeSceneSplitter();
+    const sceneAssembler = new FakeSceneAssembler();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
 
@@ -147,6 +174,8 @@ describe("runRender", () => {
         preRollTrimmer,
         privacyCutter,
         effectsEngine,
+        sceneSplitter,
+        sceneAssembler,
         voiceGen: voice,
         platformProfile: profile,
       },
@@ -187,6 +216,8 @@ describe("runRender", () => {
       const preRollTrimmer = new FakePreRollTrimmer();
       const privacyCutter = new FakePrivacyCutter();
       const effectsEngine = new FakeEffectsEngine();
+      const sceneSplitter = new FakeSceneSplitter();
+      const sceneAssembler = new FakeSceneAssembler();
       const profile = new FakePlatformProfile();
       // Real ElevenLabsVoice, no injected client, no env key: throws before any network call.
       const voice = new ElevenLabsVoice();
@@ -198,6 +229,8 @@ describe("runRender", () => {
             preRollTrimmer,
             privacyCutter,
             effectsEngine,
+            sceneSplitter,
+            sceneAssembler,
             voiceGen: voice,
             platformProfile: profile,
           },

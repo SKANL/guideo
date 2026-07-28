@@ -8,6 +8,8 @@ import type { PlatformProfile } from "../../domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../domain/ports/preroll-trimmer.js";
 import type { PrivacyCutter } from "../../domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
+import type { SceneAssembler } from "../../domain/ports/scene-assembler.js";
+import type { SceneSplitter } from "../../domain/ports/scene-splitter.js";
 import type { VoiceGen } from "../../domain/ports/voice-gen.js";
 import { review } from "../../domain/review-gate.js";
 import { type GuideoPaths, projectPaths } from "../paths.js";
@@ -24,6 +26,8 @@ export async function runRender(
     readonly preRollTrimmer: PreRollTrimmer;
     readonly privacyCutter: PrivacyCutter;
     readonly effectsEngine: EffectsEngine;
+    readonly sceneSplitter: SceneSplitter;
+    readonly sceneAssembler: SceneAssembler;
     readonly voiceGen: VoiceGen;
     readonly platformProfile: PlatformProfile;
   },
@@ -54,6 +58,8 @@ export async function runRender(
     container.preRollTrimmer,
     container.privacyCutter,
     container.effectsEngine,
+    container.sceneSplitter,
+    container.sceneAssembler,
     container.voiceGen,
     container.platformProfile,
     paths.outputPath,

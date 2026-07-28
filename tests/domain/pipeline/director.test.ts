@@ -55,28 +55,11 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
     }
   });
 
-  it("adds a fade transition at scene boundaries — fade-out on the outgoing scene's last step, fade-in on the incoming scene's first step", () => {
-    const storyboard = parseStoryboard({
-      steps: [
-        { action: "navigate", narrationSegmentId: "seg-1" },
-        { action: "pause", narrationSegmentId: "seg-2" },
-      ],
-    });
-
-    // Transitions are OFF by default (single-clip fade blacks the video); opt in to test them.
-    const result = applyDirectorDefaults(storyboard, { transitionsEnabled: true });
-
-    expect(result.steps[0]?.effects).toContainEqual({
-      type: "transition",
-      params: { edge: "out", durationSec: 0.5 },
-    });
-    expect(result.steps[1]?.effects).toContainEqual({
-      type: "transition",
-      params: { edge: "in", durationSec: 0.5 },
-    });
-  });
-
-  it("adds no transition before the first scene or after the last scene", () => {
+  // Per-scene-clip architecture Phase 1: transitions are now the ASSEMBLER's structural job (each
+  // scene becomes its own clip, so a LOCAL fade at that clip's own edge is correct — unlike the
+  // old single-clip `fade=in:st=T`, which blacked everything before T across the whole video). The
+  // Director must never add a `transition` effect itself anymore, regardless of config.
+  it("never adds a transition effect at scene boundaries — the assembler owns transitions now", () => {
     const storyboard = parseStoryboard({
       steps: [
         { action: "navigate", narrationSegmentId: "seg-1" },
@@ -86,12 +69,9 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
 
     const result = applyDirectorDefaults(storyboard);
 
-    expect(
-      result.steps[0]?.effects.filter((e) => e.type === "transition" && e.params.edge === "in"),
-    ).toEqual([]);
-    expect(
-      result.steps[1]?.effects.filter((e) => e.type === "transition" && e.params.edge === "out"),
-    ).toEqual([]);
+    for (const step of result.steps) {
+      expect(step.effects.some((e) => e.type === "transition")).toBe(false);
+    }
   });
 
   it("does not add a conflicting zoom default to a scene that already has an effect (AI-proposed or user-edited)", () => {
@@ -141,22 +121,7 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
     expect(result.steps[0]?.effects).toEqual([]);
   });
 
-  it("respects config toggles: transitionsEnabled=false skips transitions", () => {
-    const storyboard = parseStoryboard({
-      steps: [
-        { action: "navigate", narrationSegmentId: "seg-1" },
-        { action: "pause", narrationSegmentId: "seg-2" },
-      ],
-    });
-
-    const result = applyDirectorDefaults(storyboard, { transitionsEnabled: false });
-
-    for (const step of result.steps) {
-      expect(step.effects.some((e) => e.type === "transition")).toBe(false);
-    }
-  });
-
-  it("honors a custom zoomLevel and transitionDurationSec", () => {
+  it("honors a custom zoomLevel", () => {
     const storyboard = parseStoryboard({
       steps: [
         { action: "click", selector: "#a", narrationSegmentId: "seg-1" },
@@ -164,19 +129,11 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
       ],
     });
 
-    const result = applyDirectorDefaults(storyboard, {
-      zoomLevel: 1.2,
-      transitionDurationSec: 1,
-      transitionsEnabled: true,
-    });
+    const result = applyDirectorDefaults(storyboard, { zoomLevel: 1.2 });
 
     expect(result.steps[0]?.effects).toContainEqual({
       type: "zoom-in",
       params: { selector: "#a", level: 1.2 },
-    });
-    expect(result.steps[0]?.effects).toContainEqual({
-      type: "transition",
-      params: { edge: "out", durationSec: 1 },
     });
   });
 });

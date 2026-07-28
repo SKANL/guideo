@@ -6,6 +6,8 @@ import type { PlatformProfile } from "../ports/platform-profile.js";
 import type { PreRollTrimmer } from "../ports/preroll-trimmer.js";
 import type { PrivacyCutter } from "../ports/privacy-cutter.js";
 import type { RecordingEngine } from "../ports/recording-engine.js";
+import type { SceneAssembler } from "../ports/scene-assembler.js";
+import type { SceneSplitter } from "../ports/scene-splitter.js";
 import type { VoiceGen } from "../ports/voice-gen.js";
 import { deriveSubtitles } from "./subtitles.js";
 
@@ -36,9 +38,15 @@ export interface RenderOptions {
 // naturally skipped (no matching scene) and kept steps' effects gate to the rebased times for
 // free. The Edit stage (design doc section B) then runs effectsEngine.apply() on the CUT clip
 // BEFORE subtitles/compose, applying each step's AI-proposed effects time-gated to its scene
-// range; compose() receives the EDITED clip, never the raw one. Subtitles are derived purely from
-// the (possibly cut+rebased) Script's known text plus each kept segment's actual synthesized audio
-// duration (no transcription, per spec).
+// range. The per-scene-clip architecture (Phase 1) then runs AFTER effects, BEFORE compose:
+// sceneSplitter.split() extracts the edited clip's scenes into standalone per-scene files, and
+// sceneAssembler.assemble() recomposes them into ONE clip with a duration-preserving dip transition
+// at every boundary (a LOCAL fade on each scene clip's own edge — correct by construction, unlike
+// the old single shared-timeline `fade`, which blacked the whole video; see director.ts). No
+// overlap between scenes means total duration is unchanged, so subtitles/audio (both keyed to the
+// ORIGINAL scene timing) stay aligned; compose() receives the ASSEMBLED clip, never the merely
+// edited one. Subtitles are derived purely from the (possibly cut+rebased) Script's known text plus
+// each kept segment's actual synthesized audio duration (no transcription, per spec).
 export async function render(
   approved: ApprovedStoryboard,
   script: Script,
@@ -46,6 +54,8 @@ export async function render(
   preRollTrimmer: PreRollTrimmer,
   privacyCutter: PrivacyCutter,
   effectsEngine: EffectsEngine,
+  sceneSplitter: SceneSplitter,
+  sceneAssembler: SceneAssembler,
   voice: VoiceGen,
   profile: PlatformProfile,
   outputPath: string,
@@ -60,9 +70,11 @@ export async function render(
   const trimmedClip = trimPreRoll ? await preRollTrimmer.trim(rawClip, rawClip.preRollMs) : rawClip;
   const cutResult = await privacyCutter.cut(trimmedClip, approved, script, audioTracks);
   const editedClip = await effectsEngine.apply(cutResult.clip, approved);
+  const sceneClips = await sceneSplitter.split(editedClip);
+  const assembledClip = await sceneAssembler.assemble(sceneClips);
   const subtitles = deriveSubtitles(cutResult.script, cutResult.audioTracks);
   return profile.compose({
-    rawClip: editedClip,
+    rawClip: assembledClip,
     audioTracks: cutResult.audioTracks,
     subtitles,
     outputPath,

@@ -13,6 +13,8 @@ import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/p
 import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
 import type { PrivacyCutResult, PrivacyCutter } from "../../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
+import type { SceneAssembler } from "../../../src/domain/ports/scene-assembler.js";
+import type { SceneClip, SceneSplitter } from "../../../src/domain/ports/scene-splitter.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
 import type { Target } from "../../../src/domain/ports/target.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
@@ -76,6 +78,25 @@ class FakePrivacyCutter implements PrivacyCutter {
   }
 }
 
+class FakeSceneSplitter implements SceneSplitter {
+  async split(clip: RawClip): Promise<SceneClip[]> {
+    return [{ narrationSegmentId: "", path: clip.path, durationMs: clip.durationMs }];
+  }
+}
+
+class FakeSceneAssembler implements SceneAssembler {
+  async assemble(sceneClips: readonly SceneClip[]): Promise<RawClip> {
+    const only = sceneClips[0];
+    return {
+      path: only?.path ?? "",
+      durationMs: only?.durationMs ?? 0,
+      aspectRatio: "16:9",
+      scenes: [],
+      preRollMs: 0,
+    };
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   async synthesize(segment: NarrationSegment): Promise<Audio> {
     return {
@@ -100,6 +121,8 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
     const preRollTrimmer = new FakePreRollTrimmer();
     const privacyCutter = new FakePrivacyCutter();
     const effectsEngine = new FakeEffectsEngine();
+    const sceneSplitter = new FakeSceneSplitter();
+    const sceneAssembler = new FakeSceneAssembler();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
@@ -116,6 +139,8 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
       preRollTrimmer,
       privacyCutter,
       effectsEngine,
+      sceneSplitter,
+      sceneAssembler,
       voice,
       profile,
     );

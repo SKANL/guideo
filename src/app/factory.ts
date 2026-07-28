@@ -8,6 +8,8 @@ import {
   FfmpegEffectsEngine,
   FfmpegPreRollTrimmer,
   FfmpegPrivacyCutter,
+  FfmpegSceneAssembler,
+  FfmpegSceneSplitter,
   UrlCredsTarget,
   WebRecordingEngine,
   YouTubeProfile,
@@ -17,6 +19,8 @@ import type { PlatformProfile } from "../domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../domain/ports/preroll-trimmer.js";
 import type { PrivacyCutter } from "../domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../domain/ports/recording-engine.js";
+import type { SceneAssembler } from "../domain/ports/scene-assembler.js";
+import type { SceneSplitter } from "../domain/ports/scene-splitter.js";
 import type { ScriptGen } from "../domain/ports/script-gen.js";
 import type { Target } from "../domain/ports/target.js";
 import type { VoiceGen } from "../domain/ports/voice-gen.js";
@@ -28,6 +32,8 @@ export interface Container {
   readonly preRollTrimmer: PreRollTrimmer;
   readonly privacyCutter: PrivacyCutter;
   readonly effectsEngine: EffectsEngine;
+  readonly sceneSplitter: SceneSplitter;
+  readonly sceneAssembler: SceneAssembler;
   readonly voiceGen: VoiceGen;
   readonly platformProfile: PlatformProfile;
 }
@@ -42,6 +48,8 @@ export function createContainer(overrides: Partial<Container> = {}): Container {
     preRollTrimmer: overrides.preRollTrimmer ?? new FfmpegPreRollTrimmer(),
     privacyCutter: overrides.privacyCutter ?? new FfmpegPrivacyCutter(),
     effectsEngine: overrides.effectsEngine ?? new FfmpegEffectsEngine(),
+    sceneSplitter: overrides.sceneSplitter ?? new FfmpegSceneSplitter(),
+    sceneAssembler: overrides.sceneAssembler ?? new FfmpegSceneAssembler(),
     voiceGen: overrides.voiceGen ?? new ElevenLabsVoice(),
     platformProfile: overrides.platformProfile ?? new YouTubeProfile(),
   };

@@ -13,6 +13,8 @@ import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/p
 import type { PreRollTrimmer } from "../../../src/domain/ports/preroll-trimmer.js";
 import type { PrivacyCutResult, PrivacyCutter } from "../../../src/domain/ports/privacy-cutter.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
+import type { SceneAssembler } from "../../../src/domain/ports/scene-assembler.js";
+import type { SceneClip, SceneSplitter } from "../../../src/domain/ports/scene-splitter.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
 import type { Target } from "../../../src/domain/ports/target.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
@@ -93,6 +95,40 @@ class FakePrivacyCutter implements PrivacyCutter {
   }
 }
 
+// Passthrough fakes mirroring the real FfmpegSceneSplitter/FfmpegSceneAssembler's single-scene
+// passthrough behavior — never rewriting `path` — so tests asserting on rawClip.path through the
+// pipeline stay correct without depending on real ffmpeg.
+class FakeSceneSplitter implements SceneSplitter {
+  async split(clip: RawClip): Promise<SceneClip[]> {
+    if (clip.scenes.length === 0) {
+      return [{ narrationSegmentId: "", path: clip.path, durationMs: clip.durationMs }];
+    }
+    return clip.scenes.map((scene) => ({
+      narrationSegmentId: scene.narrationSegmentId,
+      path: clip.path,
+      durationMs: scene.endMs - scene.startMs,
+    }));
+  }
+}
+
+class FakeSceneAssembler implements SceneAssembler {
+  async assemble(sceneClips: readonly SceneClip[]): Promise<RawClip> {
+    let elapsedMs = 0;
+    const scenes = sceneClips.map((clip) => {
+      const startMs = elapsedMs;
+      elapsedMs += clip.durationMs;
+      return { narrationSegmentId: clip.narrationSegmentId, startMs, endMs: elapsedMs };
+    });
+    return {
+      path: sceneClips[0]?.path ?? "",
+      durationMs: elapsedMs,
+      aspectRatio: "16:9",
+      scenes,
+      preRollMs: 0,
+    };
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   synthesizeCalls = 0;
   async synthesize(segment: NarrationSegment): Promise<Audio> {
@@ -142,6 +178,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       new FakePrivacyCutter(),
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -199,6 +237,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       new FakePrivacyCutter(),
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -266,6 +306,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       new FakePrivacyCutter(),
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -328,6 +370,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       new FakePrivacyCutter(),
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -384,6 +428,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       new FakePrivacyCutter(),
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -437,6 +483,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       new FakePrivacyCutter(),
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -507,6 +555,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       privacyCutter,
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",
@@ -593,6 +643,8 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       preRollTrimmer,
       privacyCutter,
       effectsEngine,
+      new FakeSceneSplitter(),
+      new FakeSceneAssembler(),
       voice,
       profile,
       "final.mp4",

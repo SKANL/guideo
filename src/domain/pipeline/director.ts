@@ -6,16 +6,17 @@
 // and BEFORE it's written for the REVIEW gate — the human sees (and can edit/remove) these
 // defaults, never a bypass of the gate. No I/O, no randomness: same input always -> same output.
 //
-// Two defaults, each independently toggleable and each skippable so nothing already authored (AI
-// or human) is ever overwritten:
-// 1. A gentle default zoom-in on each scene's FOCAL element — its first click/hover/zoom step that
-//    carries a selector. Skipped entirely if the scene already has ANY effect on ANY of its steps
-//    (respects existing intent) or has no focal element (pure navigate/pause/type scenes).
-// 2. A short fade `transition` at every scene BOUNDARY (not before the first scene, not after the
-//    last): a fade-out on the outgoing scene's last step, a fade-in on the incoming scene's first
-//    step — skipped per-step if that exact step already carries a transition (idempotent; does NOT
-//    depend on the zoom-default's "already has an effect" rule, since transitions are a structural/
-//    boundary concern orthogonal to a scene's content effects).
+// One default, toggleable and skippable so nothing already authored (AI or human) is ever
+// overwritten: a gentle default zoom-in on each scene's FOCAL element — its first click/hover/zoom
+// step that carries a selector. Skipped entirely if the scene already has ANY effect on ANY of its
+// steps (respects existing intent) or has no focal element (pure navigate/pause/type scenes).
+//
+// Scene-boundary transitions are NOT a Director concern anymore (per-scene-clip architecture
+// Phase 1): the DIRECTOR only ever edits ONE shared/continuous clip's storyboard-step effects, so
+// the transition it used to add was a single-clip `fade=in:st=T`, which renders everything BEFORE T
+// black across the WHOLE video — see the SceneAssembler (ffmpeg-scene-assembler.ts), which now owns
+// transitions correctly: it splits each scene into its own clip file first, so a fade LOCAL to that
+// clip's own edge is always correct.
 import type { Effect } from "../models/effect.js";
 import type { Storyboard, StoryboardStep } from "../models/storyboard.js";
 
@@ -27,21 +28,12 @@ export interface DirectorConfig {
   // effects filtergraph (each animated zoom is a split+crop+scale+overlay — 7 of them made a live
   // render crawl for minutes). Interval 3 => zoom the 1st, 4th, 7th... eligible scene.
   readonly zoomSceneInterval: number;
-  readonly transitionsEnabled: boolean;
-  readonly transitionDurationSec: number;
 }
 
 export const DEFAULT_DIRECTOR_CONFIG: DirectorConfig = {
   zoomDefaultsEnabled: true,
   zoomLevel: 1.12,
   zoomSceneInterval: 3,
-  // OFF by default: the `transition` effect is a single-clip `fade` (see effect-filter-builders),
-  // and ffmpeg's `fade=in:st=T` renders everything BEFORE T black — chaining one per scene boundary
-  // blacked out almost the whole video (real e2e). A correct boundary dip/crossfade needs per-scene
-  // clips composed with `xfade`, which this single continuous/cut clip doesn't have yet. Left
-  // available (opt-in) and wired, but not auto-applied until that per-scene-clip upgrade lands.
-  transitionsEnabled: false,
-  transitionDurationSec: 0.5,
 };
 
 // Actions that target a specific on-screen element — a scene's focal point, if any. Matches the
@@ -83,10 +75,6 @@ function hasAnyEffect(steps: readonly StoryboardStep[], scene: Scene): boolean {
   return scene.indices.some((i) => (steps[i]?.effects.length ?? 0) > 0);
 }
 
-function hasTransition(step: StoryboardStep): boolean {
-  return step.effects.some((effect) => effect.type === "transition");
-}
-
 function withAddedEffect(step: StoryboardStep, effect: Effect): StoryboardStep {
   return { ...step, effects: [...step.effects, effect] };
 }
@@ -117,34 +105,6 @@ export function applyDirectorDefaults(
         params: { selector: step.selector, level: cfg.zoomLevel },
       };
       steps[focalIndex] = withAddedEffect(step, zoom);
-    }
-  }
-
-  if (cfg.transitionsEnabled) {
-    for (let i = 0; i < scenes.length - 1; i += 1) {
-      const outgoing = scenes[i];
-      const incoming = scenes[i + 1];
-      if (!outgoing || !incoming) continue;
-
-      const outIndex = outgoing.indices[outgoing.indices.length - 1];
-      const outStep = outIndex !== undefined ? steps[outIndex] : undefined;
-      if (outIndex !== undefined && outStep && !hasTransition(outStep)) {
-        const fadeOut: Effect = {
-          type: "transition",
-          params: { edge: "out", durationSec: cfg.transitionDurationSec },
-        };
-        steps[outIndex] = withAddedEffect(outStep, fadeOut);
-      }
-
-      const inIndex = incoming.indices[0];
-      const inStep = inIndex !== undefined ? steps[inIndex] : undefined;
-      if (inIndex !== undefined && inStep && !hasTransition(inStep)) {
-        const fadeIn: Effect = {
-          type: "transition",
-          params: { edge: "in", durationSec: cfg.transitionDurationSec },
-        };
-        steps[inIndex] = withAddedEffect(inStep, fadeIn);
-      }
     }
   }
 
