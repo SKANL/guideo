@@ -22,6 +22,11 @@ import type { Storyboard, StoryboardStep } from "../models/storyboard.js";
 export interface DirectorConfig {
   readonly zoomDefaultsEnabled: boolean;
   readonly zoomLevel: number;
+  // Zoom only every Nth eligible scene (occasional emphasis, not a zoom on EVERY scene). A zoom on
+  // every scene is both visually nauseating (constant motion = not tasteful) and a very heavy
+  // effects filtergraph (each animated zoom is a split+crop+scale+overlay — 7 of them made a live
+  // render crawl for minutes). Interval 3 => zoom the 1st, 4th, 7th... eligible scene.
+  readonly zoomSceneInterval: number;
   readonly transitionsEnabled: boolean;
   readonly transitionDurationSec: number;
 }
@@ -29,6 +34,7 @@ export interface DirectorConfig {
 export const DEFAULT_DIRECTOR_CONFIG: DirectorConfig = {
   zoomDefaultsEnabled: true,
   zoomLevel: 1.12,
+  zoomSceneInterval: 3,
   transitionsEnabled: true,
   transitionDurationSec: 0.5,
 };
@@ -89,12 +95,18 @@ export function applyDirectorDefaults(
   const scenes = groupIntoScenes(steps);
 
   if (cfg.zoomDefaultsEnabled) {
+    const interval = Math.max(1, Math.floor(cfg.zoomSceneInterval));
+    let eligibleCount = 0;
     for (const scene of scenes) {
       if (hasAnyEffect(steps, scene)) continue;
       const focalIndex = findFocalIndex(steps, scene);
       if (focalIndex === undefined) continue;
       const step = steps[focalIndex];
       if (!step?.selector) continue;
+      // Selective: only every Nth eligible scene gets a default zoom (see zoomSceneInterval).
+      const shouldZoom = eligibleCount % interval === 0;
+      eligibleCount += 1;
+      if (!shouldZoom) continue;
       const zoom: Effect = {
         type: "zoom-in",
         params: { selector: step.selector, level: cfg.zoomLevel },

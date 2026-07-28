@@ -19,6 +19,27 @@ describe("applyDirectorDefaults — tasteful rule-based default effects (effects
     });
   });
 
+  it("zooms only every Nth eligible scene (selective, not every scene) — tasteful + light render", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "click", selector: "#a", narrationSegmentId: "seg-1" },
+        { action: "click", selector: "#b", narrationSegmentId: "seg-2" },
+        { action: "click", selector: "#c", narrationSegmentId: "seg-3" },
+        { action: "click", selector: "#d", narrationSegmentId: "seg-4" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard); // default interval 3
+
+    const hasZoom = (i: number) =>
+      (result.steps[i]?.effects ?? []).some((e) => e.type === "zoom-in");
+    // Interval 3: the 1st (index 0) and 4th (index 3) eligible scenes zoom; the 2nd and 3rd do not.
+    expect(hasZoom(0)).toBe(true);
+    expect(hasZoom(1)).toBe(false);
+    expect(hasZoom(2)).toBe(false);
+    expect(hasZoom(3)).toBe(true);
+  });
+
   it("adds no default effect to a pure navigate/pause scene with no focal element", () => {
     const storyboard = parseStoryboard({
       steps: [
