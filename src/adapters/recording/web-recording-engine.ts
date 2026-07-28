@@ -71,6 +71,27 @@ export interface PatchrightCaptureBrowser {
 
 export type CaptureBrowserLauncher = () => Promise<PatchrightCaptureBrowser>;
 
+// A "scene" is a consecutive run of storyboard steps sharing one narrationSegmentId — the unit
+// narration-driven timing paces to. Grouped by adjacency only (no reordering): a storyboard is
+// LLM-authored and already emits steps for one narration beat together.
+interface CaptureScene {
+  readonly narrationSegmentId: string;
+  readonly steps: readonly StoryboardStep[];
+}
+
+function groupIntoScenes(steps: readonly StoryboardStep[]): CaptureScene[] {
+  const scenes: { narrationSegmentId: string; steps: StoryboardStep[] }[] = [];
+  for (const step of steps) {
+    const last = scenes[scenes.length - 1];
+    if (last && last.narrationSegmentId === step.narrationSegmentId) {
+      last.steps.push(step);
+    } else {
+      scenes.push({ narrationSegmentId: step.narrationSegmentId, steps: [step] });
+    }
+  }
+  return scenes;
+}
+
 function requireSelector(step: StoryboardStep): string {
   if (!step.selector) {
     throw new Error(`WebRecordingEngine: step action "${step.action}" requires a selector.`);
@@ -107,7 +128,10 @@ export class WebRecordingEngine implements RecordingEngine {
     this.loginConfig = { ...DEFAULT_LOGIN_CONFIG, ...loginConfig };
   }
 
-  async capture(storyboard: ApprovedStoryboard): Promise<RawClip> {
+  async capture(
+    storyboard: ApprovedStoryboard,
+    segmentDurationsMs: ReadonlyMap<string, number> = new Map(),
+  ): Promise<RawClip> {
     const browser = await (this.injectedLauncher ?? (() => this.launchDefaultBrowser()))();
 
     try {
@@ -128,17 +152,15 @@ export class WebRecordingEngine implements RecordingEngine {
       let mousePosition = this.config.initialMousePosition;
       let elapsedMs = 0;
 
-      for (const step of storyboard.steps) {
-        const pauseMs = naturalPauseMs(this.random, this.humanFeel);
-        await page.waitForTimeout(pauseMs);
-        elapsedMs += pauseMs;
-
-        const result = await this.runStep(page, step, mousePosition);
+      for (const scene of groupIntoScenes(storyboard.steps)) {
+        const result = await this.runScene(
+          page,
+          scene,
+          mousePosition,
+          segmentDurationsMs.get(scene.narrationSegmentId),
+        );
         mousePosition = result.mousePosition;
         elapsedMs += result.elapsedMs;
-
-        // Same overlay can reappear (or a new one open) after a client-side route change.
-        if (step.action === "navigate") await this.dismissOverlays(page);
       }
 
       const video = page.video();
@@ -151,6 +173,44 @@ export class WebRecordingEngine implements RecordingEngine {
     } finally {
       await browser.close();
     }
+  }
+
+  // Runs one scene's steps with the existing human-feel pacing, then — if the narration segment
+  // has a known target duration — pads the scene with one extra waitForTimeout so its total
+  // elapsed time fills roughly that duration (never trims: only pads UP to the target, and never
+  // below minSceneMs). No target known (targetMs undefined) => unchanged human-feel behavior.
+  private async runScene(
+    page: PatchrightCapturePage,
+    scene: CaptureScene,
+    mousePositionIn: Point,
+    targetMs: number | undefined,
+  ): Promise<{ mousePosition: Point; elapsedMs: number }> {
+    let mousePosition = mousePositionIn;
+    let elapsedMs = 0;
+
+    for (const step of scene.steps) {
+      const pauseMs = naturalPauseMs(this.random, this.humanFeel);
+      await page.waitForTimeout(pauseMs);
+      elapsedMs += pauseMs;
+
+      const result = await this.runStep(page, step, mousePosition);
+      mousePosition = result.mousePosition;
+      elapsedMs += result.elapsedMs;
+
+      // Same overlay can reappear (or a new one open) after a client-side route change.
+      if (step.action === "navigate") await this.dismissOverlays(page);
+    }
+
+    if (targetMs !== undefined) {
+      const effectiveTargetMs = Math.max(targetMs, this.config.minSceneMs);
+      const shortfallMs = effectiveTargetMs - elapsedMs;
+      if (shortfallMs > this.config.timingSlackMs) {
+        await page.waitForTimeout(shortfallMs);
+        elapsedMs += shortfallMs;
+      }
+    }
+
+    return { mousePosition, elapsedMs };
   }
 
   private async runStep(

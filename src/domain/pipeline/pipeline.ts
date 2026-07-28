@@ -8,11 +8,14 @@ import { deriveSubtitles } from "./subtitles.js";
 
 // render() only accepts an ApprovedStoryboard — the compile-time REVIEW-gate hard stop realized
 // at the type level: plan()'s raw { script, storyboard } cannot reach render() without first
-// going through ReviewGate.review() (src/domain/review-gate.ts). capture() runs concurrently with
-// the whole voice batch (they're independent), but the voice segments themselves are synthesized
-// SEQUENTIALLY — TTS providers cap concurrent requests (ElevenLabs free tier = 2; fanning out all
-// segments at once hit a 429). Subtitles are derived purely from the Script's known text plus each
-// segment's actual synthesized audio duration (no transcription, per spec); compose() runs last.
+// going through ReviewGate.review() (src/domain/review-gate.ts). Voice synthesizes FIRST, then
+// capture() runs — narration-driven timing (real e2e: capture paced itself independent of
+// narration, giving a 21s video against a 43s script). Each segment's synthesized Audio.durationMs
+// becomes that segment's target on-screen time, so capture() can pace scenes to match. The voice
+// segments themselves are synthesized SEQUENTIALLY — TTS providers cap concurrent requests
+// (ElevenLabs free tier = 2; fanning out all segments at once hit a 429). Subtitles are derived
+// purely from the Script's known text plus each segment's actual synthesized audio duration (no
+// transcription, per spec); compose() runs last.
 export async function render(
   approved: ApprovedStoryboard,
   script: Script,
@@ -21,10 +24,11 @@ export async function render(
   profile: PlatformProfile,
   outputPath: string,
 ): Promise<FinalVideo> {
-  const [rawClip, audioTracks] = await Promise.all([
-    engine.capture(approved),
-    synthesizeSequentially(voice, script),
-  ]);
+  const audioTracks = await synthesizeSequentially(voice, script);
+  const segmentDurationsMs = new Map(
+    audioTracks.map((audio) => [audio.segmentId, audio.durationMs]),
+  );
+  const rawClip = await engine.capture(approved, segmentDurationsMs);
   const subtitles = deriveSubtitles(script, audioTracks);
   return profile.compose({ rawClip, audioTracks, subtitles, outputPath });
 }

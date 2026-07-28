@@ -142,6 +142,61 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     expect(maxInFlight).toBe(1);
   });
 
+  // Regression (real e2e): capture paced itself independent of narration, producing a 21s video
+  // against a 43s script. Voice must fully finish BEFORE capture starts, and capture must receive
+  // each segment's synthesized audio duration so it can pace scenes to match narration length.
+  it("synthesizes voice fully before capture starts, passing capture the per-segment target durations", async () => {
+    const events: string[] = [];
+    let receivedDurations: ReadonlyMap<string, number> | undefined;
+
+    const script = parseScript({
+      segments: [
+        { id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } },
+        { id: "s2", text: "Two.", timing: { startMs: 1000, durationMs: 2000 } },
+      ],
+    });
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "pause", narrationSegmentId: "s1" },
+        { action: "pause", narrationSegmentId: "s2" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        events.push(`voice:${segment.id}`);
+        return {
+          segmentId: segment.id,
+          path: `${segment.id}.mp3`,
+          durationMs: segment.timing.durationMs,
+        };
+      },
+    };
+    const engine: RecordingEngine = {
+      async capture(
+        _approved,
+        segmentDurationsMs: ReadonlyMap<string, number> = new Map(),
+      ): Promise<RawClip> {
+        events.push("capture:start");
+        receivedDurations = segmentDurationsMs;
+        return { path: "clip.mp4", durationMs: 3000, aspectRatio: "16:9" };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(approved, script, engine, voice, profile, "final.mp4");
+
+    expect(events).toEqual(["voice:s1", "voice:s2", "capture:start"]);
+    expect(receivedDurations).toEqual(
+      new Map([
+        ["s1", 1000],
+        ["s2", 2000],
+      ]),
+    );
+  });
+
   it("never calls capture/synthesize when the storyboard is rejected", () => {
     const engine = new FakeRecordingEngine();
     const voice = new FakeVoiceGen();

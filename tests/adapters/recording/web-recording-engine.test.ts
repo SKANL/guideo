@@ -410,6 +410,61 @@ describe("WebRecordingEngine", () => {
     expect(harness.goto).toHaveBeenCalledWith("https://example.com/x", { waitUntil: "load" });
   });
 
+  // --- Narration-driven timing (voice-first pacing) ----------------------------------------
+
+  it("paces each scene's total elapsed time to its narration segment's target duration", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "pause", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    // dismissOverlays disabled so every waitForTimeout call is attributable to a scene (no login/
+    // overlay-dismissal waits mixed into the sequence).
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1), undefined, {
+      dismissOverlays: false,
+    });
+    const segmentDurationsMs = new Map([
+      ["seg-1", 3000],
+      ["seg-2", 5000],
+    ]);
+
+    await engine.capture(approved, segmentDurationsMs);
+
+    const waits = harness.waitForTimeout.mock.calls.map(([ms]) => ms as number);
+    // Each "pause" step contributes exactly 2 human-feel waits (the pre-step pacing wait + the
+    // pause action's own extra wait) before a scene-padding wait tops the scene up to its target.
+    const scene1Actions = (waits[0] ?? 0) + (waits[1] ?? 0);
+    const scene1Total = scene1Actions + (waits[2] ?? 0);
+    const scene2Actions = (waits[3] ?? 0) + (waits[4] ?? 0);
+    const scene2Total = scene2Actions + (waits[5] ?? 0);
+
+    // Never trimmed below what the actions themselves took.
+    expect(scene1Total).toBeGreaterThanOrEqual(scene1Actions);
+    expect(scene2Total).toBeGreaterThanOrEqual(scene2Actions);
+    // Paced to within the default timing slack of the narration target.
+    expect(Math.abs(scene1Total - 3000)).toBeLessThanOrEqual(250);
+    expect(Math.abs(scene2Total - 5000)).toBeLessThanOrEqual(250);
+  });
+
+  it("runs a scene whose segment has no target duration without crashing (falls back to human-feel pacing)", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-unknown" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+    const clip = await engine.capture(approved, new Map([["seg-other", 9999]]));
+
+    expect(clip.durationMs).toBeGreaterThan(0);
+  });
+
   it("resolves click/hover selectors to the :visible match when a selector could match multiple elements", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({

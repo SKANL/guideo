@@ -21,6 +21,14 @@ export interface CaptureConfig {
   // How goto() waits for a "navigate" step to settle — client-rendered SPAs need "networkidle" (or
   // at least "load"); "domcontentloaded" fires before hydration.
   readonly navigateWaitUntil: WaitUntil;
+  // Narration-driven timing (scene pacing): a scene (consecutive steps sharing a
+  // narrationSegmentId) is padded with an extra waitForTimeout to fill its target duration, but
+  // never below this floor even if the target itself is smaller.
+  readonly minSceneMs: number;
+  // Padding is skipped once a scene's elapsed time is already within this tolerance of its target
+  // — physical capture never hits an exact millisecond, so don't bother padding for a negligible
+  // shortfall.
+  readonly timingSlackMs: number;
 }
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
@@ -34,4 +42,6 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   dismissPresses: 2,
   dismissWaitMs: 300,
   navigateWaitUntil: "networkidle",
+  minSceneMs: 800,
+  timingSlackMs: 250,
 };
