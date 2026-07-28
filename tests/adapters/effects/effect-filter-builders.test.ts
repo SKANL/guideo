@@ -137,6 +137,93 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
     });
   });
 
+  describe("transition — boundary fade (effects-overhaul Phase B/C), argv-safe (plain numeric filter args, no interpolated paths)", () => {
+    it("edge=out: fades to black ending at the gate's endSec, over durationSec", () => {
+      const effect: Effect = { type: "transition", params: { edge: "out", durationSec: 0.5 } };
+
+      const fragment = filterBuilderRegistry.transition?.(
+        effect,
+        gate,
+        null,
+        "[0:v]",
+        "[v1]",
+        "e1",
+      );
+
+      // gate.endSec=4, durationSec=0.5 -> fade-out starts at st=3.5.
+      expect(fragment).toBe("[0:v]fade=t=out:st=3.5:d=0.5:color=black[v1]");
+    });
+
+    it("edge=in: fades from black starting at the gate's startSec, over durationSec", () => {
+      const effect: Effect = { type: "transition", params: { edge: "in", durationSec: 0.5 } };
+
+      const fragment = filterBuilderRegistry.transition?.(
+        effect,
+        gate,
+        null,
+        "[0:v]",
+        "[v1]",
+        "e1",
+      );
+
+      // gate.startSec=1.5, durationSec=0.5 -> fade-in starts at st=1.5.
+      expect(fragment).toBe("[0:v]fade=t=in:st=1.5:d=0.5:color=black[v1]");
+    });
+
+    it("defaults durationSec when omitted", () => {
+      const effect: Effect = { type: "transition", params: { edge: "in" } };
+
+      const fragment = filterBuilderRegistry.transition?.(
+        effect,
+        gate,
+        null,
+        "[0:v]",
+        "[v1]",
+        "e1",
+      );
+
+      expect(fragment).toContain("fade=t=in:st=1.5:d=");
+    });
+
+    it("returns null (skip) for a missing/invalid edge instead of crashing", () => {
+      const effect: Effect = { type: "transition", params: {} };
+
+      const fragment = filterBuilderRegistry.transition?.(
+        effect,
+        gate,
+        null,
+        "[0:v]",
+        "[v1]",
+        "e1",
+      );
+
+      expect(fragment).toBeNull();
+    });
+
+    it("never touches region — same fragment regardless of a resolved region", () => {
+      const effect: Effect = { type: "transition", params: { edge: "out", durationSec: 0.2 } };
+
+      const withRegion = filterBuilderRegistry.transition?.(
+        effect,
+        gate,
+        region,
+        "[0:v]",
+        "[v1]",
+        "e1",
+      );
+      const withoutRegion = filterBuilderRegistry.transition?.(
+        effect,
+        gate,
+        null,
+        "[0:v]",
+        "[v1]",
+        "e1",
+      );
+
+      expect(withRegion).toBe(withoutRegion);
+    });
+  });
+
   describe("blur-region — crop -> boxblur on a split branch, overlaid back in place", () => {
     it("blurs the resolved region, gated by enable=between(t,a,b)", () => {
       const effect: Effect = { type: "blur-region", params: {} };

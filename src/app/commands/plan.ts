@@ -4,6 +4,7 @@ import type { Brief } from "../../domain/models/brief.js";
 import { type FlowGraph, parseFlowGraph } from "../../domain/models/flow-graph.js";
 import type { Script } from "../../domain/models/script.js";
 import type { Storyboard } from "../../domain/models/storyboard.js";
+import { applyDirectorDefaults, type DirectorConfig } from "../../domain/pipeline/director.js";
 import { plan } from "../../domain/pipeline/planning.js";
 import type { ScriptGen } from "../../domain/ports/script-gen.js";
 import type { Target } from "../../domain/ports/target.js";
@@ -26,15 +27,26 @@ function loadPersistedFlowGraph(flowGraphPath: string): FlowGraph {
 // RecordingEngine, VoiceGen, and PlatformProfile are not reachable through it at all, so no
 // capture/voice/compose call can happen from this code path at compile time, matching
 // domain/pipeline/planning.ts's own "deliberately never touches..." guarantee one layer down.
+// `directorOptions`: toggles/tunes the Director (director.ts) that decorates the AI-proposed
+// storyboard with tasteful default effects (gentle focal zoom + scene-boundary transitions) before
+// it's written for the REVIEW gate — `enabled: false` turns it off entirely (default ON); the rest
+// merges over DEFAULT_DIRECTOR_CONFIG.
 export async function runPlan(
   container: { readonly scriptGen: ScriptGen },
   brief: Brief,
   paths: GuideoPaths = projectPaths({ project: "default" }),
+  directorOptions: { readonly enabled?: boolean } & Partial<DirectorConfig> = {},
 ): Promise<{ script: Script; storyboard: Storyboard }> {
   const graph = loadPersistedFlowGraph(paths.flowGraphPath);
   // A cached-graph Target: plan() consumes the already-discovered graph, no live browser here.
   const cachedTarget: Target = { discover: async () => graph };
-  const { script, storyboard } = await plan(cachedTarget, brief, container.scriptGen);
+  const { script, storyboard: rawStoryboard } = await plan(
+    cachedTarget,
+    brief,
+    container.scriptGen,
+  );
+  const { enabled = true, ...directorConfig } = directorOptions;
+  const storyboard = enabled ? applyDirectorDefaults(rawStoryboard, directorConfig) : rawStoryboard;
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.scriptPath, JSON.stringify(script, null, 2), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard, null, 2), "utf8");

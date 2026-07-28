@@ -45,6 +45,21 @@ class FakeScriptGen implements ScriptGen {
   }
 }
 
+class FakeFocalScriptGen implements ScriptGen {
+  async generate(_brief: unknown, _routes: FlowGraphRoutes) {
+    return {
+      script: parseScript({
+        segments: [
+          { id: "seg-1", text: "Click invite.", timing: { startMs: 0, durationMs: 1500 } },
+        ],
+      }),
+      storyboard: parseStoryboard({
+        steps: [{ action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" }],
+      }),
+    };
+  }
+}
+
 class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   async capture(): Promise<RawClip> {
@@ -138,5 +153,34 @@ describe("runPlan", () => {
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
 
     await expect(runPlan({ scriptGen }, brief, paths)).rejects.toThrow(/guideo discover/);
+  });
+
+  it("applies Director defaults to the storyboard written for the REVIEW gate (default ON)", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeGraph(paths);
+    const scriptGen = new FakeFocalScriptGen();
+    const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
+
+    const result = await runPlan({ scriptGen }, brief, paths);
+
+    expect(result.storyboard.steps[0]?.effects).toContainEqual({
+      type: "zoom-in",
+      params: { selector: "#invite-btn", level: 1.12 },
+    });
+    const writtenStoryboard = JSON.parse(await readFile(paths.storyboardPath, "utf8"));
+    expect(writtenStoryboard).toEqual(result.storyboard);
+  });
+
+  it("can be turned off via directorOptions.enabled = false", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeGraph(paths);
+    const scriptGen = new FakeFocalScriptGen();
+    const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
+
+    const result = await runPlan({ scriptGen }, brief, paths, { enabled: false });
+
+    expect(result.storyboard.steps[0]?.effects).toEqual([]);
   });
 });

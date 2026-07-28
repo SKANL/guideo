@@ -131,9 +131,41 @@ const buildBlurRegion: FilterBuilder = (_effect, gate, region, inLabel, outLabel
   );
 };
 
+// Scene-boundary transition (effects-overhaul Phase B/C — design doc section B): a short
+// cross-dissolve-ish fade, NOT a true two-input `xfade` (that needs two separate input clips;
+// this pipeline composes one continuous/cut clip, so there is nothing to cross-fade BETWEEN at
+// the ffmpeg-filter level). Pragmatic stand-in: fade to/from black at the scene's own edge, over
+// `params.durationSec`. The Director (director.ts) pairs two of these per boundary — a `edge:"out"`
+// on the OUTGOING scene's last step (fades out ending at that scene's gate.endSec) and an
+// `edge:"in"` on the INCOMING scene's first step (fades in starting at that scene's gate.startSec)
+// — so a boundary reads as fade-out-then-fade-in across the cut. Upgrade path: if/when clips are
+// composed from genuinely separate source segments (not one continuous recording), swap this for a
+// real `xfade` between the two segments' filter graphs instead of the fade-to-black stand-in.
+// Ignores `region` entirely — a transition never depends on the effect's spatial target.
+const DEFAULT_TRANSITION_DURATION_SEC = 0.5;
+
+const buildTransition: FilterBuilder = (effect, gate, _region, inLabel, outLabel) => {
+  const edge = effect.params.edge;
+  if (edge !== "in" && edge !== "out") {
+    return null;
+  }
+  const requestedDuration = positiveNumber(effect.params.durationSec);
+  const duration = requestedDuration ?? DEFAULT_TRANSITION_DURATION_SEC;
+  const start = edge === "out" ? gate.endSec - duration : gate.startSec;
+  return `${inLabel}fade=t=${edge}:st=${start}:d=${duration}:color=black${outLabel}`;
+};
+
+// Registry: effect type -> pure filter_complex fragment builder. To add a new effect type:
+//   1. Add its string literal to EffectTypeSchema (domain/models/effect.ts).
+//   2. Write a `FilterBuilder` here (pure — no I/O) and add it to this map, keyed by that type.
+//   3. Optional: give it a tasteful default in director.ts (domain/pipeline/director.ts) if it
+//      should be applied automatically rather than only ever AI/human-proposed.
+// That's it — effects-graph.ts and ffmpeg-effects.ts look builders up generically by `effect.type`,
+// nothing else needs to change.
 export const filterBuilderRegistry: Readonly<Record<string, FilterBuilder>> = {
   "zoom-in": buildZoom(1.3, false),
   "zoom-out": buildZoom(1.3, true),
   crop: buildCrop,
   "blur-region": buildBlurRegion,
+  transition: buildTransition,
 };

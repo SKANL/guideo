@@ -111,4 +111,30 @@ describe("FfmpegEffectsEngine (ffmpeg integration)", () => {
     const stats = await stat(edited.path);
     expect(stats.size).toBeGreaterThan(0);
   }, 30_000);
+
+  it("applies a real transition (boundary fade) over a synthetic clip, producing a valid non-empty video (effects-overhaul Phase B/C)", async (ctx) => {
+    if (!ffmpegAvailable) {
+      ctx.skip();
+      return;
+    }
+
+    const engine = new FfmpegEffectsEngine();
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "pause",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "transition", params: { edge: "out", durationSec: 0.3 } }],
+        },
+      ],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const edited = await engine.apply(rawClip, approved);
+
+    expect(edited.path).not.toBe(rawClip.path);
+    const stats = await stat(edited.path);
+    expect(stats.size).toBeGreaterThan(0);
+  }, 30_000);
 });

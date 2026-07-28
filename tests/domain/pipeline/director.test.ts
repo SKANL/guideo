@@ -1,0 +1,156 @@
+import { describe, expect, it } from "vitest";
+import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
+import { applyDirectorDefaults } from "../../../src/domain/pipeline/director.js";
+
+describe("applyDirectorDefaults — tasteful rule-based default effects (effects-overhaul Phase C)", () => {
+  it("adds a gentle default zoom-in targeting the selector of a scene's focal (click) step", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard);
+
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "zoom-in",
+      params: { selector: "#invite-btn", level: 1.12 },
+    });
+  });
+
+  it("adds no default effect to a pure navigate/pause scene with no focal element", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "navigate", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-1" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard);
+
+    for (const step of result.steps) {
+      expect(step.effects).toEqual([]);
+    }
+  });
+
+  it("adds a fade transition at scene boundaries — fade-out on the outgoing scene's last step, fade-in on the incoming scene's first step", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "navigate", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard);
+
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "transition",
+      params: { edge: "out", durationSec: 0.5 },
+    });
+    expect(result.steps[1]?.effects).toContainEqual({
+      type: "transition",
+      params: { edge: "in", durationSec: 0.5 },
+    });
+  });
+
+  it("adds no transition before the first scene or after the last scene", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "navigate", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard);
+
+    expect(
+      result.steps[0]?.effects.filter((e) => e.type === "transition" && e.params.edge === "in"),
+    ).toEqual([]);
+    expect(
+      result.steps[1]?.effects.filter((e) => e.type === "transition" && e.params.edge === "out"),
+    ).toEqual([]);
+  });
+
+  it("does not add a conflicting zoom default to a scene that already has an effect (AI-proposed or user-edited)", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        {
+          action: "click",
+          selector: "#invite-btn",
+          narrationSegmentId: "seg-1",
+          effects: [{ type: "crop", params: { x: 1, y: 2, w: 3, h: 4 } }],
+        },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard);
+
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "crop",
+      params: { x: 1, y: 2, w: 3, h: 4 },
+    });
+    expect(result.steps[0]?.effects.filter((e) => e.type === "zoom-in")).toEqual([]);
+  });
+
+  it("is deterministic — applying twice to the same input produces the same output", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "click", selector: "#a", narrationSegmentId: "seg-1" },
+        { action: "hover", selector: "#b", narrationSegmentId: "seg-2" },
+        { action: "pause", narrationSegmentId: "seg-3" },
+      ],
+    });
+
+    const first = applyDirectorDefaults(storyboard);
+    const second = applyDirectorDefaults(storyboard);
+
+    expect(second).toEqual(first);
+  });
+
+  it("respects config toggles: zoomDefaultsEnabled=false skips the zoom default", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" }],
+    });
+
+    const result = applyDirectorDefaults(storyboard, { zoomDefaultsEnabled: false });
+
+    expect(result.steps[0]?.effects).toEqual([]);
+  });
+
+  it("respects config toggles: transitionsEnabled=false skips transitions", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "navigate", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard, { transitionsEnabled: false });
+
+    for (const step of result.steps) {
+      expect(step.effects.some((e) => e.type === "transition")).toBe(false);
+    }
+  });
+
+  it("honors a custom zoomLevel and transitionDurationSec", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "click", selector: "#a", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ],
+    });
+
+    const result = applyDirectorDefaults(storyboard, { zoomLevel: 1.2, transitionDurationSec: 1 });
+
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "zoom-in",
+      params: { selector: "#a", level: 1.2 },
+    });
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "transition",
+      params: { edge: "out", durationSec: 1 },
+    });
+  });
+});

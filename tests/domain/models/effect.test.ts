@@ -21,7 +21,7 @@ describe("EffectSchema", () => {
   });
 
   it("accepts every documented effect type", () => {
-    for (const type of ["zoom-in", "zoom-out", "crop", "blur-region"]) {
+    for (const type of ["zoom-in", "zoom-out", "crop", "blur-region", "transition"]) {
       expect(() => parseEffect({ type, params: {} })).not.toThrow();
     }
   });
