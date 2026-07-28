@@ -3,6 +3,7 @@ import type { FinalVideo } from "../../domain/models/media.js";
 import { parseScript } from "../../domain/models/script.js";
 import { parseStoryboard } from "../../domain/models/storyboard.js";
 import { render } from "../../domain/pipeline/pipeline.js";
+import type { EffectsEngine } from "../../domain/ports/effects.js";
 import type { PlatformProfile } from "../../domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
 import type { VoiceGen } from "../../domain/ports/voice-gen.js";
@@ -18,6 +19,7 @@ import { type GuideoPaths, projectPaths } from "../paths.js";
 export async function runRender(
   container: {
     readonly recordingEngine: RecordingEngine;
+    readonly effectsEngine: EffectsEngine;
     readonly voiceGen: VoiceGen;
     readonly platformProfile: PlatformProfile;
   },
@@ -45,6 +47,7 @@ export async function runRender(
     approved,
     script,
     container.recordingEngine,
+    container.effectsEngine,
     container.voiceGen,
     container.platformProfile,
     paths.outputPath,

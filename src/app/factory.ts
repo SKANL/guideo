@@ -5,10 +5,12 @@
 import {
   ClaudeAgentScriptGen,
   ElevenLabsVoice,
+  FfmpegEffectsEngine,
   UrlCredsTarget,
   WebRecordingEngine,
   YouTubeProfile,
 } from "../adapters/index.js";
+import type { EffectsEngine } from "../domain/ports/effects.js";
 import type { PlatformProfile } from "../domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../domain/ports/recording-engine.js";
 import type { ScriptGen } from "../domain/ports/script-gen.js";
@@ -19,6 +21,7 @@ export interface Container {
   readonly target: Target;
   readonly scriptGen: ScriptGen;
   readonly recordingEngine: RecordingEngine;
+  readonly effectsEngine: EffectsEngine;
   readonly voiceGen: VoiceGen;
   readonly platformProfile: PlatformProfile;
 }
@@ -30,6 +33,7 @@ export function createContainer(overrides: Partial<Container> = {}): Container {
     target: overrides.target ?? new UrlCredsTarget(),
     scriptGen: overrides.scriptGen ?? new ClaudeAgentScriptGen(),
     recordingEngine: overrides.recordingEngine ?? new WebRecordingEngine(),
+    effectsEngine: overrides.effectsEngine ?? new FfmpegEffectsEngine(),
     voiceGen: overrides.voiceGen ?? new ElevenLabsVoice(),
     platformProfile: overrides.platformProfile ?? new YouTubeProfile(),
   };

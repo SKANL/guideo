@@ -7,6 +7,7 @@ import { parseScript } from "../../../src/domain/models/script.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { render } from "../../../src/domain/pipeline/pipeline.js";
 import { plan } from "../../../src/domain/pipeline/planning.js";
+import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
@@ -49,6 +50,12 @@ class FakeRecordingEngine implements RecordingEngine {
   }
 }
 
+class FakeEffectsEngine implements EffectsEngine {
+  async apply(clip: RawClip): Promise<RawClip> {
+    return clip;
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   async synthesize(segment: NarrationSegment): Promise<Audio> {
     return {
@@ -70,6 +77,7 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
     const target = new FakeTarget();
     const scriptGen = new FakeScriptGen();
     const engine = new FakeRecordingEngine();
+    const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
@@ -79,6 +87,6 @@ describe("gate enforcement: render() rejects plan()'s raw output at compile time
     // @ts-expect-error - render() requires ApprovedStoryboard; plan()'s Storyboard has not been
     // through ReviewGate.review() and cannot be minted here. This is the compile-time proof that
     // render(plan(...).storyboard) is unreachable without going through the REVIEW gate.
-    void render(storyboard, script, engine, voice, profile);
+    void render(storyboard, script, engine, effectsEngine, voice, profile);
   });
 });

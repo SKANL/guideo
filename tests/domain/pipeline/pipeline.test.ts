@@ -4,9 +4,11 @@ import { parseFlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip, Subtitle } from "../../../src/domain/models/media.js";
 import type { NarrationSegment } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
+import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { render } from "../../../src/domain/pipeline/pipeline.js";
 import { plan } from "../../../src/domain/pipeline/planning.js";
+import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
@@ -52,6 +54,16 @@ class FakeRecordingEngine implements RecordingEngine {
   }
 }
 
+class FakeEffectsEngine implements EffectsEngine {
+  applyCalls = 0;
+  lastArgs: { clip: RawClip; storyboard: ApprovedStoryboard } | undefined;
+  async apply(clip: RawClip, storyboard: ApprovedStoryboard): Promise<RawClip> {
+    this.applyCalls += 1;
+    this.lastArgs = { clip, storyboard };
+    return { ...clip, path: `edited-${clip.path}` };
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   synthesizeCalls = 0;
   async synthesize(segment: NarrationSegment): Promise<Audio> {
@@ -79,6 +91,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const target = new FakeTarget();
     const scriptGen = new FakeScriptGen();
     const engine = new FakeRecordingEngine();
+    const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
@@ -92,7 +105,15 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
     const approved = review(storyboard, { kind: "approved" });
     if (approved === null) throw new Error("expected approval to mint an ApprovedStoryboard");
 
-    const finalVideo = await render(approved, script, engine, voice, profile, "final.mp4");
+    const finalVideo = await render(
+      approved,
+      script,
+      engine,
+      effectsEngine,
+      voice,
+      profile,
+      "final.mp4",
+    );
 
     expect(engine.captureCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
@@ -107,6 +128,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
   // every segment at once hit a 429. Voice synthesis must be serialized (never overlapping).
   it("synthesizes voice segments sequentially, never overlapping calls", async () => {
     const engine = new FakeRecordingEngine();
+    const effectsEngine = new FakeEffectsEngine();
     const profile = new FakePlatformProfile();
     const script = parseScript({
       segments: [
@@ -137,7 +159,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
       },
     };
 
-    await render(approved, script, engine, voice, profile, "final.mp4");
+    await render(approved, script, engine, effectsEngine, voice, profile, "final.mp4");
 
     expect(maxInFlight).toBe(1);
   });
@@ -184,9 +206,10 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
         return { path: "clip.mp4", durationMs: 3000, aspectRatio: "16:9", scenes: [] };
       },
     };
+    const effectsEngine = new FakeEffectsEngine();
     const profile = new FakePlatformProfile();
 
-    await render(approved, script, engine, voice, profile, "final.mp4");
+    await render(approved, script, engine, effectsEngine, voice, profile, "final.mp4");
 
     expect(events).toEqual(["voice:s1", "voice:s2", "capture:start"]);
     expect(receivedDurations).toEqual(
@@ -195,6 +218,48 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
         ["s2", 2000],
       ]),
     );
+  });
+
+  // New Edit stage (design doc section B): voice -> capture -> edit -> subtitles -> compose.
+  // effectsEngine.apply() must run between capture and compose, receiving the storyboard, and
+  // compose must receive the EDITED clip it returns (not the raw captured one).
+  it("calls the effects engine between capture and compose, and compose receives the edited clip", async () => {
+    const script = parseScript({
+      segments: [{ id: "s1", text: "One.", timing: { startMs: 0, durationMs: 1000 } }],
+    });
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "s1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval");
+
+    const events: string[] = [];
+    const engine: RecordingEngine = {
+      async capture(): Promise<RawClip> {
+        events.push("capture");
+        return { path: "raw.mp4", durationMs: 1000, aspectRatio: "16:9", scenes: [] };
+      },
+    };
+    const effectsEngine: EffectsEngine = {
+      async apply(clip: RawClip, sb: ApprovedStoryboard): Promise<RawClip> {
+        events.push("edit");
+        expect(clip.path).toBe("raw.mp4");
+        expect(sb).toBe(approved);
+        return { ...clip, path: "edited.mp4" };
+      },
+    };
+    const voice: VoiceGen = {
+      async synthesize(segment: NarrationSegment): Promise<Audio> {
+        return { segmentId: segment.id, path: `${segment.id}.mp3`, durationMs: 1000 };
+      },
+    };
+    const profile = new FakePlatformProfile();
+
+    await render(approved, script, engine, effectsEngine, voice, profile, "final.mp4");
+
+    expect(events).toEqual(["capture", "edit"]);
+    expect(profile.composeCalls).toBe(1);
+    expect(profile.lastParams?.rawClip.path).toBe("edited.mp4");
   });
 
   it("never calls capture/synthesize when the storyboard is rejected", () => {

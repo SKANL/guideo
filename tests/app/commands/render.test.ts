@@ -8,7 +8,9 @@ import { projectPaths } from "../../../src/app/paths.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
 import type { NarrationSegment } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
+import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
+import type { EffectsEngine } from "../../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
@@ -25,6 +27,14 @@ class FakeRecordingEngine implements RecordingEngine {
   async capture(): Promise<RawClip> {
     this.captureCalls += 1;
     return { path: "clip.mp4", durationMs: 1500, aspectRatio: "16:9", scenes: [] };
+  }
+}
+
+class FakeEffectsEngine implements EffectsEngine {
+  applyCalls = 0;
+  async apply(clip: RawClip, _storyboard: ApprovedStoryboard): Promise<RawClip> {
+    this.applyCalls += 1;
+    return clip;
   }
 }
 
@@ -71,12 +81,13 @@ describe("runRender", () => {
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
+    const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
 
     await expect(
       runRender(
-        { recordingEngine: engine, voiceGen: voice, platformProfile: profile },
+        { recordingEngine: engine, effectsEngine, voiceGen: voice, platformProfile: profile },
         false,
         paths,
       ),
@@ -92,17 +103,19 @@ describe("runRender", () => {
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
     const engine = new FakeRecordingEngine();
+    const effectsEngine = new FakeEffectsEngine();
     const voice = new FakeVoiceGen();
     const profile = new FakePlatformProfile();
 
     const video = await runRender(
-      { recordingEngine: engine, voiceGen: voice, platformProfile: profile },
+      { recordingEngine: engine, effectsEngine, voiceGen: voice, platformProfile: profile },
       true,
       paths,
     );
 
     expect(video).toEqual({ path: "final.mp4", aspectRatio: "16:9" });
     expect(engine.captureCalls).toBe(1);
+    expect(effectsEngine.applyCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
     expect(profile.composeCalls).toBe(1);
     // The pipeline must hand the STABLE project output path to compose(), not let the adapter
@@ -130,13 +143,14 @@ describe("runRender", () => {
       const paths = projectPaths({ project: "test-project", cwd: scratchDir });
       await writeApprovedFixtures(paths);
       const engine = new FakeRecordingEngine();
+      const effectsEngine = new FakeEffectsEngine();
       const profile = new FakePlatformProfile();
       // Real ElevenLabsVoice, no injected client, no env key: throws before any network call.
       const voice = new ElevenLabsVoice();
 
       await expect(
         runRender(
-          { recordingEngine: engine, voiceGen: voice, platformProfile: profile },
+          { recordingEngine: engine, effectsEngine, voiceGen: voice, platformProfile: profile },
           true,
           paths,
         ),

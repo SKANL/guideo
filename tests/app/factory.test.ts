@@ -28,6 +28,7 @@ describe("createContainer", () => {
     expect(container.target).toBeDefined();
     expect(container.scriptGen).toBeDefined();
     expect(container.recordingEngine).toBeDefined();
+    expect(container.effectsEngine).toBeDefined();
     expect(container.voiceGen).toBeDefined();
     expect(container.platformProfile).toBeDefined();
     // Overriding only one port must leave the other four as real (non-fake) adapters.

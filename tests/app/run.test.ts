@@ -10,7 +10,9 @@ import type { FlowGraph } from "../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip } from "../../src/domain/models/media.js";
 import type { NarrationSegment } from "../../src/domain/models/script.js";
 import { parseScript } from "../../src/domain/models/script.js";
+import type { ApprovedStoryboard } from "../../src/domain/models/storyboard.js";
 import { parseStoryboard } from "../../src/domain/models/storyboard.js";
+import type { EffectsEngine } from "../../src/domain/ports/effects.js";
 import type { ComposeParams, PlatformProfile } from "../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../src/domain/ports/script-gen.js";
@@ -57,6 +59,14 @@ class FakeRecordingEngine implements RecordingEngine {
   }
 }
 
+class FakeEffectsEngine implements EffectsEngine {
+  applyCalls = 0;
+  async apply(clip: RawClip, _storyboard: ApprovedStoryboard): Promise<RawClip> {
+    this.applyCalls += 1;
+    return clip;
+  }
+}
+
 class FakeVoiceGen implements VoiceGen {
   synthesizeCalls = 0;
   async synthesize(segment: NarrationSegment): Promise<Audio> {
@@ -84,12 +94,14 @@ function makeContainer(): {
   target: FakeTarget;
   scriptGen: FakeScriptGen;
   engine: FakeRecordingEngine;
+  effectsEngine: FakeEffectsEngine;
   voice: FakeVoiceGen;
   profile: FakePlatformProfile;
 } {
   const target = new FakeTarget();
   const scriptGen = new FakeScriptGen();
   const engine = new FakeRecordingEngine();
+  const effectsEngine = new FakeEffectsEngine();
   const voice = new FakeVoiceGen();
   const profile = new FakePlatformProfile();
   return {
@@ -97,12 +109,14 @@ function makeContainer(): {
       target,
       scriptGen,
       recordingEngine: engine,
+      effectsEngine,
       voiceGen: voice,
       platformProfile: profile,
     },
     target,
     scriptGen,
     engine,
+    effectsEngine,
     voice,
     profile,
   };
@@ -329,6 +343,7 @@ describe("runCli", () => {
         target: new UrlCredsTarget(),
         scriptGen: new FakeScriptGen(),
         recordingEngine: new FakeRecordingEngine(),
+        effectsEngine: new FakeEffectsEngine(),
         voiceGen: new FakeVoiceGen(),
         platformProfile: new FakePlatformProfile(),
       };
