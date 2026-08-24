@@ -12,6 +12,27 @@ export interface EffectsGraph {
   readonly outputLabel: string;
 }
 
+function effectGate(
+  effect: { params: Record<string, unknown> },
+  sceneDurationMs: number,
+): { startSec: number; endSec: number } {
+  const entryMs = effect.params.entryMs;
+  const exitMs = effect.params.exitMs;
+  if (
+    typeof entryMs === "number" &&
+    Number.isFinite(entryMs) &&
+    typeof exitMs === "number" &&
+    Number.isFinite(exitMs) &&
+    exitMs > entryMs
+  ) {
+    return {
+      startSec: Math.max(0, entryMs) / 1000,
+      endSec: Math.min(sceneDurationMs, exitMs) / 1000,
+    };
+  }
+  return { startSec: 0, endSec: sceneDurationMs / 1000 };
+}
+
 // Combines the SPATIAL target with the TIME gate (effects-overhaul Phase A): prefers the region
 // resolved at capture time (clip.resolvedEffects[index], captured while the target element was
 // actually on screen — see WebRecordingEngine.capture()); falls back to reading an explicit
@@ -46,8 +67,6 @@ export function buildSceneEffectsGraph(
   sceneClip: SceneClip,
   storyboard: ApprovedStoryboard,
 ): EffectsGraph | null {
-  const gate = { startSec: 0, endSec: sceneClip.durationMs / 1000 };
-
   const fragments: string[] = [];
   let currentLabel = "[0:v]";
   let uid = 0;
@@ -74,7 +93,14 @@ export function buildSceneEffectsGraph(
       const region = resolveRegion(clip, effectIndex, effect);
       uid += 1;
       const nextLabel = `[v${uid}]`;
-      const fragment = builder(effect, gate, region, currentLabel, nextLabel, `e${uid}`);
+      const fragment = builder(
+        effect,
+        effectGate(effect, sceneClip.durationMs),
+        region,
+        currentLabel,
+        nextLabel,
+        `e${uid}`,
+      );
       if (fragment === null) {
         console.warn(`[effects] skipping malformed "${effect.type}" effect params.`);
         continue;

@@ -12,6 +12,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { chromium } from "patchright";
+import { sha256 } from "../../domain/artifacts/canonical.js";
+import type { DiscoveryFingerprint } from "../../domain/models/capability-profile.js";
 import {
   type FlowGraph,
   type FlowGraphEdge,
@@ -113,6 +115,30 @@ export class UrlCredsTarget implements Target {
   constructor(launcher?: BrowserLauncher, config: Partial<DiscoveryConfig> = {}) {
     this.injectedLauncher = launcher;
     this.config = { ...DEFAULT_DISCOVERY_CONFIG, ...config };
+  }
+
+  async getDiscoveryFingerprint(): Promise<DiscoveryFingerprint> {
+    const env = readTargetEnvOrThrow();
+    const loginConfig = resolveLoginConfig(this.config);
+    const browser = await (this.injectedLauncher ?? (() => this.launchDefaultBrowser()))();
+    try {
+      const page = await browser.newPage();
+      await login(page, env, loginConfig);
+      const body = (await page.$$("body"))[0];
+      const content = body ? ((await body.textContent()) ?? "") : "";
+      return {
+        url: sha256({ url: normalizeUrl(page.url() || env.url) }),
+        build: sha256({ loginConfig, nav: this.config.navItemSelector }),
+        content: sha256({ title: await page.title(), content }),
+        loginSelectors: {
+          username: loginConfig.usernameSelector,
+          password: loginConfig.passwordSelector,
+          submit: loginConfig.submitSelector,
+        },
+      };
+    } finally {
+      await browser.close();
+    }
   }
 
   async discover(): Promise<FlowGraph> {

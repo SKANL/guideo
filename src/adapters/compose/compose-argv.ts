@@ -2,6 +2,7 @@
 // argv array element (never shell-interpolated by the caller), so shell metacharacters in a
 // filename are always inert here.
 import type { ComposeParams } from "../../domain/ports/platform-profile.js";
+import { buildProfessionalH264Args } from "./render-profile.js";
 
 function sanitizePositionalPath(path: string): string {
   // A leading "-" is the only case ffmpeg's own argv parser could misread as a flag rather than
@@ -86,8 +87,7 @@ export function buildComposeArgv(
       ...(narration === "subtitles" ? ["-vf", `subtitles=${escapeForSubtitlesFilter(srtPath)}`] : []),
       "-map",
       "0:v",
-      "-c:v",
-      "libx264",
+      ...buildProfessionalH264Args(),
       "-an",
       sanitizePositionalPath(outputPath),
     ];
@@ -123,8 +123,7 @@ export function buildComposeArgv(
     "-map",
     "[aout]",
     ...(includeSubtitles ? ["-map", `${subtitleInputIndex}:s`] : []),
-    "-c:v",
-    "libx264",
+    ...buildProfessionalH264Args(),
     "-c:a",
     "aac",
     ...(includeSubtitles ? ["-c:s", "mov_text"] : []),

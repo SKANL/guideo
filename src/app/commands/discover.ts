@@ -1,7 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { canonicalJson, sha256 } from "../../domain/artifacts/canonical.js";
-import { artifactManifest, type ArtifactRef } from "../../domain/artifacts/manifest.js";
-import { normalizeFlowGraph, type FlowGraph } from "../../domain/models/flow-graph.js";
+import { type ArtifactRef, artifactManifest } from "../../domain/artifacts/manifest.js";
+import {
+  deriveCapabilityProfile,
+  isCapabilityProfile,
+} from "../../domain/models/capability-profile.js";
+import { type FlowGraph, normalizeFlowGraph } from "../../domain/models/flow-graph.js";
 import type { ArtifactStore } from "../../domain/ports/artifact-store.js";
 import type { Target } from "../../domain/ports/target.js";
 import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
@@ -12,6 +16,7 @@ const DISCOVERY_VERSION = 1;
 
 interface FlowGraphCacheRecord {
   readonly graphSha256: string;
+  readonly profileSha256: string;
   readonly ref: ArtifactRef;
 }
 
@@ -25,11 +30,18 @@ export interface DiscoverOptions {
 // adapter implementation detail; the composition root owns satisfying spec's "write the FlowGraph
 // JSON to disk" requirement for every Target implementation, fake or real).
 export async function runDiscover(
-  container: { readonly target: Target; readonly artifactStore?: ArtifactStore; readonly usageLedger?: UsageLedger },
+  container: {
+    readonly target: Target;
+    readonly artifactStore?: ArtifactStore;
+    readonly usageLedger?: UsageLedger;
+  },
   paths: GuideoPaths = projectPaths({ project: "default" }),
   options: DiscoverOptions = {},
 ): Promise<{ graph: FlowGraph; path: string }> {
-  const cached = await loadFinalizedCache(container.artifactStore, paths);
+  const fingerprint = container.target.getDiscoveryFingerprint
+    ? await container.target.getDiscoveryFingerprint()
+    : undefined;
+  const cached = await loadFinalizedCache(container.artifactStore, paths, fingerprint);
   if (cached) return { graph: cached, path: paths.flowGraphPath };
 
   const maxAttempts = options.maxAttempts ?? 2;
@@ -44,8 +56,9 @@ export async function runDiscover(
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const graph = await container.target.discover();
-        await persistDiscoveredGraph(container.artifactStore, paths, graph);
-        if (reservation) await container.usageLedger!.commit(reservation.id, { cost: 1, cached: false });
+        await persistDiscoveredGraph(container.artifactStore, paths, graph, fingerprint);
+        if (reservation)
+          await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
         return { graph, path: paths.flowGraphPath };
       } catch (error) {
         lastError = error;
@@ -54,10 +67,12 @@ export async function runDiscover(
     }
     const reason = lastError instanceof Error ? lastError.message : String(lastError);
     await container.artifactStore?.quarantine(`discover-${Date.now()}`, reason);
-    throw new Error(`discovery failed after ${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"}: ${reason}`);
+    throw new Error(
+      `discovery failed after ${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"}: ${reason}`,
+    );
   } catch (error) {
     if (reservation) {
-      await container.usageLedger!.release(
+      await container.usageLedger?.release(
         reservation.id,
         error instanceof Error ? error.message : String(error),
       );
@@ -66,7 +81,11 @@ export async function runDiscover(
   }
 }
 
-async function loadFinalizedCache(store: ArtifactStore | undefined, paths: GuideoPaths): Promise<FlowGraph | null> {
+async function loadFinalizedCache(
+  store: ArtifactStore | undefined,
+  paths: GuideoPaths,
+  fingerprint?: Parameters<typeof deriveCapabilityProfile>[1],
+): Promise<FlowGraph | null> {
   if (!store) return null;
   try {
     const [rawGraph, rawCache] = await Promise.all([
@@ -76,24 +95,60 @@ async function loadFinalizedCache(store: ArtifactStore | undefined, paths: Guide
     const graph = normalizeFlowGraph(JSON.parse(rawGraph));
     const cache = JSON.parse(rawCache) as FlowGraphCacheRecord;
     if (cache.graphSha256 !== sha256(graph)) return null;
-    return await store.lookup(cache.ref) ? graph : null;
+    const profile = JSON.parse(await readFile(paths.capabilityProfilePath, "utf8")) as unknown;
+    if (
+      !isCapabilityProfile(profile) ||
+      profile.graphSha256 !== cache.graphSha256 ||
+      cache.profileSha256 !== sha256(profile)
+    )
+      return null;
+    if (
+      fingerprint &&
+      (Object.entries(fingerprint).some(
+        ([key, value]) =>
+          key !== "loginSelectors" &&
+          value !== undefined &&
+          profile.fingerprints[key as keyof typeof profile.fingerprints] !== value,
+      ) ||
+        (fingerprint.loginSelectors !== undefined &&
+          sha256(profile.loginSelectors) !== sha256(fingerprint.loginSelectors)))
+    )
+      return null;
+    return (await store.lookup(cache.ref)) ? graph : null;
   } catch {
     return null;
   }
 }
 
-async function persistDiscoveredGraph(store: ArtifactStore | undefined, paths: GuideoPaths, graph: FlowGraph): Promise<void> {
+async function persistDiscoveredGraph(
+  store: ArtifactStore | undefined,
+  paths: GuideoPaths,
+  graph: FlowGraph,
+  fingerprint?: Parameters<typeof deriveCapabilityProfile>[1],
+): Promise<void> {
   await mkdir(paths.guideoDir, { recursive: true });
   // Keep the existing CLI persistence contract byte-compatible for legacy consumers. The cache
   // alone uses normalized bytes, so provider ordering cannot influence cache identity.
   await writeFile(paths.flowGraphPath, `${JSON.stringify(graph, null, 2)}\n`, "utf8");
-  if (!store) return;
   const normalizedGraph = normalizeFlowGraph(graph);
-  const serializedGraph = canonicalJson(normalizedGraph);
+  const profile = deriveCapabilityProfile(normalizedGraph, fingerprint);
+  await writeFile(paths.capabilityProfilePath, `${canonicalJson(profile)}\n`, "utf8");
+  if (!store) return;
   const graphSha256 = sha256(normalizedGraph);
-  const manifest = artifactManifest(DISCOVERY_SCHEMA, DISCOVERY_VERSION, { graph: graphSha256 });
-  const ref = await store.finalize(bytesOf(serializedGraph), manifest);
-  await writeFile(paths.flowGraphCachePath, `${canonicalJson({ graphSha256, ref })}\n`, "utf8");
+  const profileSha256 = sha256(profile);
+  const manifest = artifactManifest(DISCOVERY_SCHEMA, DISCOVERY_VERSION, {
+    graph: graphSha256,
+    profile: profileSha256,
+  });
+  const ref = await store.finalize(
+    bytesOf(canonicalJson({ graph: normalizedGraph, profile })),
+    manifest,
+  );
+  await writeFile(
+    paths.flowGraphCachePath,
+    `${canonicalJson({ graphSha256, profileSha256, ref })}\n`,
+    "utf8",
+  );
 }
 
 async function* bytesOf(value: string): AsyncIterable<Uint8Array> {

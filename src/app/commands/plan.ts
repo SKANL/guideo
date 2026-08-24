@@ -47,20 +47,32 @@ export async function runPlan(
   let planned: { script: Script; storyboard: Storyboard };
   try {
     planned = await plan(cachedTarget, brief, container.scriptGen);
-    if (reservation) await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
+    if (reservation)
+      await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
   } catch (error) {
     if (reservation) await container.usageLedger?.release(reservation.id, "plan failed");
     throw error;
   }
   const { script, storyboard: rawStoryboard } = planned;
   const { enabled = true, ...directorConfig } = directorOptions;
-  const storyboard = enabled ? applyDirectorDefaults(rawStoryboard, directorConfig) : rawStoryboard;
+  const storyboard = enabled
+    ? applyDirectorDefaults(rawStoryboard, script, { motionEmphasisEnabled: true, ...directorConfig })
+    : rawStoryboard;
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.scriptPath, JSON.stringify(script, null, 2), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard, null, 2), "utf8");
-  await writeFile(paths.approvalManifestPath, JSON.stringify({
-    ...approvalManifest({ flowGraph: sha256(graph), script: sha256(script), storyboard: sha256(storyboard), policy: sha256({ version: 2 }) }),
-    finalized: true,
-  }), "utf8");
+  await writeFile(
+    paths.approvalManifestPath,
+    JSON.stringify({
+      ...approvalManifest({
+        flowGraph: sha256(graph),
+        script: sha256(script),
+        storyboard: sha256(storyboard),
+        policy: sha256({ version: 2 }),
+      }),
+      finalized: true,
+    }),
+    "utf8",
+  );
   return { script, storyboard };
 }

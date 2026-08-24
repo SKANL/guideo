@@ -12,7 +12,6 @@ import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/medi
 import type { NarrationSegment } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
-import { DEFAULT_CONTENT_REGION } from "../../../src/domain/pipeline/director.js";
 import type { ComposeParams, PlatformProfile } from "../../../src/domain/ports/platform-profile.js";
 import type { RecordingEngine } from "../../../src/domain/ports/recording-engine.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
@@ -57,7 +56,14 @@ class FakeFocalScriptGen implements ScriptGen {
         ],
       }),
       storyboard: parseStoryboard({
-        steps: [{ action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" }],
+        steps: [
+          {
+            action: "click",
+            selector: "#invite-btn",
+            narrationSegmentId: "seg-1",
+            evidence: { reference: "Invite teammate" },
+          },
+        ],
       }),
     };
   }
@@ -168,7 +174,7 @@ describe("runPlan", () => {
     await expect(runPlan({ scriptGen }, brief, paths)).rejects.toThrow(/guideo discover/);
   });
 
-  it("applies Director defaults to the storyboard written for the REVIEW gate (default ON)", async () => {
+  it("keeps motion opt-in when writing the storyboard for the REVIEW gate", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeGraph(paths);
@@ -179,12 +185,32 @@ describe("runPlan", () => {
 
     expect(result.storyboard.steps[0]?.effects).toContainEqual({
       type: "zoom-in",
-      params: { ...DEFAULT_CONTENT_REGION, level: 1.12 },
+      params: expect.objectContaining({ selector: "#invite-btn" }),
     });
     const writtenStoryboard = JSON.parse(await readFile(paths.storyboardPath, "utf8"));
     expect(writtenStoryboard).toEqual(result.storyboard);
   });
 
+  it("adds deterministic semantic emphasis only when explicitly enabled", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeGraph(paths);
+    const scriptGen = new FakeFocalScriptGen();
+    const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
+
+    const result = await runPlan({ scriptGen }, brief, paths, { motionEmphasisEnabled: true });
+
+    expect(result.storyboard.steps[0]?.effects).toContainEqual({
+      type: "zoom-in",
+      params: {
+        selector: "#invite-btn",
+        semanticTarget: "Invite teammate",
+        level: 1.12,
+        entryMs: 0,
+        exitMs: 1500,
+      },
+    });
+  });
   it("can be turned off via directorOptions.enabled = false", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });

@@ -68,6 +68,40 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
     expect(graph?.outputLabel).toBe("[v1]");
   });
 
+  it("uses optional motion entry and exit timing while preserving the full-scene default", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 2000,
+      aspectRatio: "16:9",
+      scenes: [],
+      preRollMs: 0,
+    };
+    const sceneClip: SceneClip = {
+      path: "scene.mp4",
+      narrationSegmentId: "seg-1",
+      durationMs: 2000,
+    };
+    const approved = approve({
+      steps: [
+        {
+          action: "click",
+          selector: "#invite",
+          narrationSegmentId: "seg-1",
+          effects: [
+            {
+              type: "zoom-in",
+              params: { level: 1.12, entryMs: 300, exitMs: 1200 },
+            },
+          ],
+        },
+      ],
+    });
+
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
+
+    expect(graph?.filterComplex).toContain("enable='between(t,0.3,1.2)'");
+  });
+
   it("only applies effects belonging to the target scene, ignoring other scenes' effects entirely (no warning)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const clip: RawClip = {

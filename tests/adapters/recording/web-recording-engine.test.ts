@@ -194,6 +194,32 @@ describe("WebRecordingEngine", () => {
     }
   });
 
+  it("uses a professional 1080p viewport and lets callers override device scale", async () => {
+    const harness = fakeCaptureHarness();
+    const storyboard = parseStoryboard({
+      steps: [{ action: "pause", narrationSegmentId: "seg-1" }],
+    });
+    const approved = review(storyboard, { kind: "approved" });
+    if (approved === null) throw new Error("expected approval to mint ApprovedStoryboard");
+
+    const engine = new WebRecordingEngine(
+      harness.launcher,
+      new SeededRandom(1),
+      {},
+      { deviceScaleFactor: 2 },
+    );
+    await engine.capture(approved);
+
+    expect(harness.newContext).toHaveBeenCalledWith({
+      recordVideo: expect.objectContaining({
+        dir: expect.any(String),
+        size: { width: 1920, height: 1080 },
+      }),
+      viewport: { width: 1920, height: 1080 },
+      deviceScaleFactor: 2,
+    });
+  });
+
   it("reads the navigate URL from params.route when params.url is absent (LLM key variance)", async () => {
     const harness = fakeCaptureHarness();
     const storyboard = parseStoryboard({

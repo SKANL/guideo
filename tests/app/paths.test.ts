@@ -11,6 +11,7 @@ describe("projectPaths", () => {
       guideoDir,
       flowGraphPath: join(guideoDir, "flow-graph.json"),
       flowGraphCachePath: join(guideoDir, "flow-graph-cache.json"),
+      capabilityProfilePath: join(guideoDir, "capability-profile.json"),
       scriptPath: join(guideoDir, "script.json"),
       storyboardPath: join(guideoDir, "storyboard.json"),
       approvalManifestPath: join(guideoDir, "approval-manifest.json"),

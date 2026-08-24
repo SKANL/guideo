@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import { PROFESSIONAL_RENDER_PROFILE } from "../compose/render-profile.js";
 import type { WaitUntil } from "../target/login.js";
 
 // Non-human-feel capture knobs — where video lands, viewport size, and where the (virtual) mouse
@@ -10,6 +11,9 @@ export interface CaptureConfig {
   readonly videoDir: string;
   // 16:9 by default — spec requires a platform-agnostic 16:9-ish raw clip (compose reframes it).
   readonly viewport: { readonly width: number; readonly height: number };
+  // Browser raster scale is separate from the recorded-video dimensions. Keep the professional
+  // default conservative; capable callers can raise it without replacing the full config object.
+  readonly deviceScaleFactor: number;
   readonly initialMousePosition: { readonly x: number; readonly y: number };
   // Real e2e finding: an onboarding/welcome Radix dialog covers the nav and intercepts every
   // click. When true, capture() presses `dismissKey` `dismissPresses` times (after login and
@@ -52,7 +56,8 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   // ponytail: os.tmpdir() default, cross-platform, no cleanup logic here — override videoDir for
   // a persistent capture directory if the caller wants to keep raw clips around.
   videoDir: tmpdir(),
-  viewport: { width: 1280, height: 720 },
+  viewport: PROFESSIONAL_RENDER_PROFILE.viewport,
+  deviceScaleFactor: PROFESSIONAL_RENDER_PROFILE.deviceScaleFactor,
   initialMousePosition: { x: 0, y: 0 },
   dismissOverlays: true,
   dismissKey: "Escape",

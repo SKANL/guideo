@@ -105,6 +105,8 @@ export interface PatchrightCaptureContext {
 export interface PatchrightCaptureBrowser {
   newContext(options: {
     recordVideo: { dir: string; size?: { width: number; height: number } };
+    viewport?: { width: number; height: number };
+    deviceScaleFactor?: number;
   }): Promise<PatchrightCaptureContext>;
   close(): Promise<void>;
 }
@@ -211,6 +213,8 @@ export class WebRecordingEngine implements RecordingEngine {
       const videoDir = await mkdtemp(join(this.config.videoDir, "guideo-capture-"));
       const context = await browser.newContext({
         recordVideo: { dir: videoDir, size: this.config.viewport },
+        viewport: this.config.viewport,
+        deviceScaleFactor: this.config.deviceScaleFactor,
       });
       // patchright/playwright starts recording video the moment the context is created — the
       // real wall-clock time from here until scene 0's first action is genuine login/overlay-
