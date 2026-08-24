@@ -315,7 +315,7 @@ describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in cap
       "-i",
       "clip.mp4",
       "-vf",
-      "subtitles='subs.srt'",
+      "subtitles='subs.srt':force_style='Fontsize=18,Alignment=2,MarginV=72,Outline=1,Shadow=1'",
       "-map",
       "0:v",
       "-c:v",
@@ -349,6 +349,15 @@ describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in cap
     expect(argv).not.toContain("-c:a");
     expect(argv).not.toContain("aac");
     expect(argv).toContain("-an");
+  });
+
+  it("keeps burned captions compact and within the 1080p bottom safe area", () => {
+    const params: ComposeParams = { ...baseParams, narration: "subtitles", audioTracks: [] };
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+
+    expect(argv[argv.indexOf("-vf") + 1]).toContain(
+      "force_style='Fontsize=18,Alignment=2,MarginV=72,Outline=1,Shadow=1'",
+    );
   });
 
   it("escapes ffmpeg subtitles-filter metacharacters (colon, backslash, quote) in the SRT path as one argv item", () => {

@@ -16,7 +16,8 @@ export const DEFAULT_CONTENT_REGION = { x: 330, y: 96, w: 830, h: 540 } as const
 export const DEFAULT_DIRECTOR_CONFIG: DirectorConfig = {
   motionEmphasisEnabled: false,
   zoomDefaultsEnabled: false,
-  zoomLevel: 1.12,
+  // 25% is visible at the 1080p delivery profile while remaining restrained for product UI.
+  zoomLevel: 1.25,
 };
 
 function withAddedEffect(step: StoryboardStep, effect: Effect): StoryboardStep {

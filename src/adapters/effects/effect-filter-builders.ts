@@ -78,10 +78,17 @@ function progressExpr(gate: FilterGate): string {
 // scale's `iw`/`ih` refer to the crop's OUTPUT size (iw_orig/level), multiplying by the identical
 // level(t) expression again always cancels back to the original constant frame size, so the
 // overlay's negotiated link size never changes mid-stream even though the zoom is animating.
+const PROFESSIONAL_ZOOM_MIN = 1.25;
+const PROFESSIONAL_ZOOM_MAX = 1.4;
+
+function zoomLevel(value: unknown, defaultLevel: number): number {
+  const requested = positiveNumber(value) ?? defaultLevel;
+  return Math.min(PROFESSIONAL_ZOOM_MAX, Math.max(PROFESSIONAL_ZOOM_MIN, requested));
+}
+
 function buildZoom(defaultLevel: number, reverse: boolean): FilterBuilder {
   return (effect, gate, region, inLabel, outLabel, uid) => {
-    const requested = positiveNumber(effect.params.level);
-    const level = requested !== null && requested > 1 ? requested : defaultLevel;
+    const level = zoomLevel(effect.params.level, defaultLevel);
     const p = progressExpr(gate);
     const lvl = reverse ? `(${level}-(${level}-1)*${p})` : `(1+(${level}-1)*${p})`;
     const cx = region ? String(region.x + region.w / 2) : "iw/2";

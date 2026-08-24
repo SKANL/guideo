@@ -42,7 +42,7 @@ describe("applyDirectorDefaults", () => {
       params: {
         selector: "#invite",
         semanticTarget: "Invite teammate",
-        level: 1.12,
+        level: 1.25,
         entryMs: 150,
         exitMs: 850,
       },

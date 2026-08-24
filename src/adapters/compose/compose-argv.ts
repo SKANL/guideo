@@ -22,6 +22,14 @@ function escapeForSubtitlesFilter(path: string): string {
   return `'${escaped}'`;
 }
 
+// Bottom-center captions remain within the 1080p action-safe area and use a restrained readable
+// size. This applies only to hardsubs; soft subtitle tracks preserve user-player styling.
+const BURNED_CAPTION_STYLE = "Fontsize=18,Alignment=2,MarginV=72,Outline=1,Shadow=1";
+
+function burnedSubtitleFilter(path: string): string {
+  return `subtitles=${escapeForSubtitlesFilter(path)}:force_style='${BURNED_CAPTION_STYLE}'`;
+}
+
 // Compares each audio track's scene startMs (from RawClip.scenes, matched by segmentId) against
 // the naive back-to-back concat cumulative offset (sum of PRECEDING tracks' own durations). With
 // "dip" assembly (contiguous scenes, no overlap) these always match, so the plain concat filter
@@ -84,7 +92,7 @@ export function buildComposeArgv(
       "-y",
       "-i",
       sanitizePositionalPath(params.rawClip.path),
-      ...(narration === "subtitles" ? ["-vf", `subtitles=${escapeForSubtitlesFilter(srtPath)}`] : []),
+      ...(narration === "subtitles" ? ["-vf", burnedSubtitleFilter(srtPath)] : []),
       "-map",
       "0:v",
       ...buildProfessionalH264Args(),

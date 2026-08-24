@@ -13,13 +13,19 @@ describe("toSrt", () => {
       [
         "1",
         "00:00:00,000 --> 00:00:01,500",
-        "Let's log in.",
+        "{\\an2\\fs18\\bord1\\shad1}Let's log in.",
         "",
         "2",
         "00:01:05,250 --> 00:01:07,250",
-        "Click submit.",
+        "{\\an2\\fs18\\bord1\\shad1}Click submit.",
         "",
       ].join("\n"),
+    );
+  });
+
+  it("adds a compact, bottom-safe presentation style to every cue", () => {
+    expect(toSrt([{ text: "Caption", startMs: 0, durationMs: 1000 }])).toContain(
+      "{\\an2\\fs18\\bord1\\shad1}",
     );
   });
 });

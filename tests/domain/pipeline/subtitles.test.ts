@@ -34,4 +34,22 @@ describe("deriveSubtitles", () => {
     const subtitles = deriveSubtitles(script, scenes);
     expect(subtitles).toEqual([{ text: "Let's log in.", startMs: 0, durationMs: 1500 }]);
   });
+
+  it("splits a long caption into readable, sequential cues with at most two lines each", () => {
+    const longScript = parseScript({
+      segments: [{
+        id: "seg-1",
+        text: "Open the menu, choose the team workspace, and then select the member you want to invite today.",
+        timing: { startMs: 0, durationMs: 5000 },
+      }],
+    });
+
+    const subtitles = deriveSubtitles(longScript, [{ narrationSegmentId: "seg-1", startMs: 1000, endMs: 6000 }]);
+
+    expect(subtitles.length).toBeGreaterThan(1);
+    expect(subtitles.every((subtitle) => subtitle.text.split("\n").length <= 2)).toBe(true);
+    expect(subtitles[0]).toMatchObject({ startMs: 1000 });
+    expect(subtitles.at(-1)!.startMs + subtitles.at(-1)!.durationMs).toBe(6000);
+    expect(subtitles.slice(1).every((subtitle, index) => subtitle.startMs === subtitles[index]!.startMs + subtitles[index]!.durationMs)).toBe(true);
+  });
 });

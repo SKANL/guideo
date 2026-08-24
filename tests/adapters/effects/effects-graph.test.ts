@@ -102,6 +102,36 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
     expect(graph?.filterComplex).toContain("enable='between(t,0.3,1.2)'");
   });
 
+  it("keeps the capture-resolved focal region and raises a weak requested zoom to the professional minimum", () => {
+    const clip: RawClip = {
+      path: "clip.mp4",
+      durationMs: 2000,
+      aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 }],
+      preRollMs: 0,
+      resolvedEffects: [
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 1400, y: 700, w: 80, h: 40 } },
+      ],
+    };
+    const approved = approve({
+      steps: [{
+        action: "click",
+        selector: "#add-to-cart",
+        narrationSegmentId: "seg-1",
+        effects: [{ type: "zoom-in", params: { level: 1.12 } }],
+      }],
+    });
+    const sceneClip: SceneClip = { narrationSegmentId: "seg-1", path: "scene.mp4", durationMs: 2000 };
+
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
+
+    // center = 1440, 720. The graph must consume capture evidence, rather than fall back to frame center.
+    expect(graph?.filterComplex).toContain("x='1440-");
+    expect(graph?.filterComplex).toContain("y='720-");
+    // 1.12 is visually too subtle at 1080p; the renderer enforces the documented professional floor.
+    expect(graph?.filterComplex).toContain("(1+(1.25-1)*");
+  });
+
   it("only applies effects belonging to the target scene, ignoring other scenes' effects entirely (no warning)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const clip: RawClip = {

@@ -65,7 +65,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       expect(fragment).not.toContain("ih/2");
     });
 
-    it("zoom-in: honors an explicit params.level override", () => {
+    it("zoom-in: bounds an explicit params.level override to the professional maximum", () => {
       const effect: Effect = { type: "zoom-in", params: { level: 2 } };
 
       const fragment = filterBuilderRegistry["zoom-in"]?.(
@@ -77,7 +77,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
         "e1",
       );
 
-      expect(fragment).toContain("(1+(2-1)*");
+      expect(fragment).toContain("(1+(1.4-1)*");
     });
 
     it("zoom-out: reverses the animation direction (level starts high and ramps toward 1) — distinct from zoom-in", () => {
