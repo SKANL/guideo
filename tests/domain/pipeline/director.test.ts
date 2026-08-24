@@ -95,4 +95,29 @@ describe("applyDirectorDefaults", () => {
       applyDirectorDefaults(storyboard, script, { zoomDefaultsEnabled: true }).steps[0]?.effects,
     ).toHaveLength(1);
   });
+
+  it("uses a timed spotlight for every semantic action but only one valuable zoom per narration segment", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "click", selector: "#invite", narrationSegmentId: "seg-1", evidence: { reference: "Invite teammate" } },
+        { action: "click", selector: "#confirm", narrationSegmentId: "seg-1", evidence: { reference: "Confirm invitation" } },
+      ],
+    });
+    const result = applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true });
+    expect(result.steps.flatMap((step) => step.effects).filter((effect) => effect.type === "crop")).toHaveLength(2);
+    expect(result.steps.flatMap((step) => step.effects).filter((effect) => effect.type === "zoom-in")).toHaveLength(1);
+    expect(result.steps[0]?.effects).toContainEqual({
+      type: "crop",
+      params: expect.objectContaining({ selector: "#invite", entryMs: 75, exitMs: 425 }),
+    });
+  });
+
+  it("does not zoom a selector without Discover evidence, but retains action emphasis", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "#invite", narrationSegmentId: "seg-1" }],
+    });
+    const effects = applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true }).steps[0]?.effects;
+    expect(effects).toContainEqual({ type: "crop", params: expect.objectContaining({ selector: "#invite" }) });
+    expect(effects?.some((effect) => effect.type === "zoom-in")).toBe(false);
+  });
 });

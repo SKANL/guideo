@@ -77,6 +77,7 @@ describe("MotionPlan", () => {
         startMs: 600,
         durationMs: 75,
         target: { selector: "#invite", evidence: "Invite team member" },
+        intent: "coverage",
       },
       {
         kind: "action",
@@ -85,6 +86,8 @@ describe("MotionPlan", () => {
         startMs: 675,
         durationMs: 225,
         target: { selector: "#invite", evidence: "Invite team member" },
+        intent: "attention",
+        zoomEligible: true,
       },
       {
         kind: "reaction",
@@ -93,6 +96,7 @@ describe("MotionPlan", () => {
         startMs: 900,
         durationMs: 125,
         target: { selector: "#invite", evidence: "Invite team member" },
+        intent: "coverage",
       },
       {
         kind: "hold",
@@ -101,6 +105,7 @@ describe("MotionPlan", () => {
         startMs: 1025,
         durationMs: 75,
         target: { selector: "#invite", evidence: "Invite team member" },
+        intent: "coverage",
       },
     ]);
   });
@@ -114,5 +119,30 @@ describe("MotionPlan", () => {
       selector: "[data-test=checkout]",
       evidence: "[data-test=checkout]",
     });
+  });
+
+  it("marks only evidenced click actions as zoom-eligible while preserving the entry/action/reaction/hold grammar", () => {
+    const storyboard = parseStoryboard({
+      steps: [
+        { action: "type", selector: "#email", narrationSegmentId: "seg-1" },
+        { action: "click", selector: "#invite", narrationSegmentId: "seg-1" },
+        { action: "click", selector: "#confirm", narrationSegmentId: "seg-2", evidence: { reference: "Confirm invitation" } },
+      ],
+    });
+    const plan = deriveMotionPlan(storyboard, script);
+    expect(plan.beats.filter((beat) => beat.stepIndex === 1 && beat.kind === "action")[0]).toMatchObject({
+      intent: "attention",
+      zoomEligible: false,
+    });
+    expect(plan.beats.filter((beat) => beat.stepIndex === 2 && beat.kind === "action")[0]).toMatchObject({
+      intent: "attention",
+      zoomEligible: true,
+    });
+    expect(plan.beats.filter((beat) => beat.stepIndex === 0).map((beat) => beat.intent)).toEqual([
+      "coverage",
+      "coverage",
+      "coverage",
+      "reframe",
+    ]);
   });
 });

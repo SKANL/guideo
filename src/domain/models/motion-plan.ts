@@ -3,6 +3,9 @@ import { z } from "zod";
 export const MotionBeatKindSchema = z.enum(["setup", "action", "reaction", "hold"]);
 export type MotionBeatKind = z.infer<typeof MotionBeatKindSchema>;
 
+export const MotionIntentSchema = z.enum(["coverage", "attention", "reframe"]);
+export type MotionIntent = z.infer<typeof MotionIntentSchema>;
+
 export const MotionTargetSchema = z.object({
   selector: z.string().min(1),
   evidence: z.string().min(1),
@@ -16,6 +19,8 @@ export const MotionBeatSchema = z.object({
   startMs: z.number().nonnegative(),
   durationMs: z.number().nonnegative(),
   target: MotionTargetSchema.optional(),
+  intent: MotionIntentSchema.optional(),
+  zoomEligible: z.boolean().optional(),
 });
 export type MotionBeat = z.infer<typeof MotionBeatSchema>;
 

@@ -19,25 +19,6 @@ export const DEFAULT_DIRECTOR_CONFIG: DirectorConfig = {
   zoomLevel: 1.12,
 };
 
-interface Scene {
-  readonly narrationSegmentId: string;
-  readonly indices: readonly number[];
-}
-
-function groupIntoScenes(steps: readonly StoryboardStep[]): Scene[] {
-  const scenes: { narrationSegmentId: string; indices: number[] }[] = [];
-  steps.forEach((step, index) => {
-    const last = scenes[scenes.length - 1];
-    if (last && last.narrationSegmentId === step.narrationSegmentId) last.indices.push(index);
-    else scenes.push({ narrationSegmentId: step.narrationSegmentId, indices: [index] });
-  });
-  return scenes;
-}
-
-function hasAnyEffect(steps: readonly StoryboardStep[], scene: Scene): boolean {
-  return scene.indices.some((index) => (steps[index]?.effects.length ?? 0) > 0);
-}
-
 function withAddedEffect(step: StoryboardStep, effect: Effect): StoryboardStep {
   return { ...step, effects: [...step.effects, effect] };
 }
@@ -52,37 +33,51 @@ export function applyDirectorDefaults(
 
   const steps = [...storyboard.steps];
   const plan = deriveMotionPlan(storyboard, script);
-  const scenes = groupIntoScenes(steps);
-  for (const scene of scenes) {
-    if (hasAnyEffect(steps, scene)) continue;
-    const actionBeat = plan.beats.find(
-      (beat) =>
-        beat.narrationSegmentId === scene.narrationSegmentId &&
-        scene.indices.includes(beat.stepIndex) &&
-        beat.kind === "action" &&
-        beat.target,
-    );
-    if (!actionBeat?.target) continue;
+  const zoomedSegments = new Set<string>();
+  for (const actionBeat of plan.beats) {
+    if (actionBeat.kind !== "action" || actionBeat.intent !== "attention" || !actionBeat.target)
+      continue;
+    const step = steps[actionBeat.stepIndex];
+    if (!step || step.effects.length > 0) continue;
     const reactionBeat = plan.beats.find(
       (beat) => beat.stepIndex === actionBeat.stepIndex && beat.kind === "reaction",
     );
-    const step = steps[actionBeat.stepIndex];
     if (!step || !reactionBeat) continue;
     const segmentStartMs = script.segments.find(
       (segment) => segment.id === actionBeat.narrationSegmentId,
     )?.timing.startMs;
     if (segmentStartMs === undefined) continue;
 
-    steps[actionBeat.stepIndex] = withAddedEffect(step, {
-      type: "zoom-in",
-      params: {
-        selector: actionBeat.target.selector,
-        semanticTarget: actionBeat.target.evidence,
-        level: cfg.zoomLevel,
-        entryMs: actionBeat.startMs - segmentStartMs,
-        exitMs: reactionBeat.startMs + reactionBeat.durationMs - segmentStartMs,
-      },
-    });
+    const timing = {
+      entryMs: actionBeat.startMs - segmentStartMs,
+      exitMs: reactionBeat.startMs + reactionBeat.durationMs - segmentStartMs,
+    };
+    let nextStep = step;
+    if (cfg.motionEmphasisEnabled) {
+      nextStep = withAddedEffect(nextStep, {
+        type: "crop",
+        params: {
+          selector: actionBeat.target.selector,
+          semanticTarget: actionBeat.target.evidence,
+          emphasis: "spotlight",
+          ...timing,
+        },
+      });
+    }
+    const legacyZoom = cfg.zoomDefaultsEnabled && Boolean(actionBeat.target.evidence);
+    if ((actionBeat.zoomEligible || legacyZoom) && !zoomedSegments.has(actionBeat.narrationSegmentId)) {
+      nextStep = withAddedEffect(nextStep, {
+        type: "zoom-in",
+        params: {
+          selector: actionBeat.target.selector,
+          semanticTarget: actionBeat.target.evidence,
+          level: cfg.zoomLevel,
+          ...timing,
+        },
+      });
+      zoomedSegments.add(actionBeat.narrationSegmentId);
+    }
+    steps[actionBeat.stepIndex] = nextStep;
   }
 
   return { ...storyboard, steps };

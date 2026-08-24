@@ -13,12 +13,18 @@ function semanticTarget(step: StoryboardStep): MotionTarget | undefined {
   return evidence ? { selector: step.selector, evidence } : undefined;
 }
 
+function hasDiscoverEvidence(step: StoryboardStep): boolean {
+  return Boolean(step.evidence?.reference ?? step.evidence?.locatorCandidates?.[0]);
+}
+
 function deriveStepBeats(
   narrationSegmentId: string,
   stepIndex: number,
   startMs: number,
   durationMs: number,
   target: MotionTarget | undefined,
+  action: StoryboardStep["action"],
+  zoomEligible: boolean,
 ): MotionBeat[] {
   const setupMs = Math.floor((durationMs * BEAT_WEIGHTS.setup) / 100);
   const actionMs = Math.floor((durationMs * BEAT_WEIGHTS.action) / 100);
@@ -35,6 +41,13 @@ function deriveStepBeats(
     startMs: startMs + offsetMs,
     durationMs: beatDurationMs,
     ...(target ? { target } : {}),
+    intent:
+      kind === "action" && target
+        ? "attention"
+        : kind === "hold" && action === "type"
+          ? "reframe"
+          : "coverage",
+    ...(kind === "action" ? { zoomEligible } : {}),
   });
 
   return [
@@ -73,6 +86,8 @@ export function deriveMotionPlan(storyboard: Storyboard, script: Script): Motion
           stepStart,
           stepEnd - stepStart,
           semanticTarget(step),
+          step.action,
+          step.action === "click" && hasDiscoverEvidence(step),
         ),
       );
     }
