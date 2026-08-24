@@ -89,6 +89,20 @@ export interface Audio {
   readonly segmentId: string;
   readonly path: string;
   readonly durationMs: number;
+  /** Provider timings are preferred; deterministic planned timings are explicitly approximate. */
+  readonly speech?: SpeechTrack;
+  readonly provenance?: AudioProvenance;
+}
+
+export interface TimedWord { readonly text: string; readonly startMs: number; readonly endMs: number; }
+export interface SpeechTrack { readonly words: readonly TimedWord[]; readonly approximate: boolean; }
+export interface AudioProvenance {
+  readonly audioSha256: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly voiceId: string;
+  readonly seed?: number;
+  readonly measuredCost: { readonly unit: "usd-micros"; readonly amount: number; readonly cache: "hit" | "miss" };
 }
 
 export interface Subtitle {

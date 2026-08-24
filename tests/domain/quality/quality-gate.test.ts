@@ -70,4 +70,30 @@ describe("quality gate", () => {
       "output height 720 is below required 1080",
     ]);
   });
+
+  it("blocks sync, action timing, classified dead air, caption, frame, stream, and provenance defects", () => {
+    const report = evaluateQuality(
+      { durationMs: 3_000, hasVideo: true, hasAudio: false, videoCodec: "vp9", width: 1280, height: 720, videoStreams: 2, audioStreams: 1, subtitleStreams: 0, syncP95Ms: 250, frozenFrameRatio: 0.2, blackFrameRatio: 0.1 },
+      { expectedDurationMs: 3_000, expectedSegments: 1, actualSegments: 1, narration: "subtitles", captionsRequired: true, hasCaptions: true, expectedVideoCodec: "h264", minimumWidth: 1920, minimumHeight: 1080, maximumSyncP95Ms: 100, actionWordOffsetsMs: [150], maximumActionWordOffsetMs: 100, deadAir: [{ kind: "loading", durationMs: 500, intentional: false }], maximumUnintentionalDeadAirMs: 200, captionEvidence: { coverage: 0.8, legible: false, occluded: true }, maximumFrozenFrameRatio: 0.05, maximumBlackFrameRatio: 0.01, expectedVideoStreams: 1, expectedAudioStreams: 0, expectedSubtitleStreams: 1, provenanceRequired: true, hasProvenance: false },
+    );
+
+    expect(report.failures).toEqual([
+      "subtitles output must not contain an audio stream",
+      "output video codec vp9 does not match required h264",
+      "output width 1280 is below required 1920",
+      "output height 720 is below required 1080",
+      "sync p95 250ms exceeds 100ms",
+      "action-word timing offset 150ms exceeds 100ms",
+      "unintentional loading dead air 500ms exceeds 200ms",
+      "caption coverage 80% is incomplete",
+      "captions are not legible",
+      "captions are occluded",
+      "frozen-frame ratio 20% exceeds 5%",
+      "black-frame ratio 10% exceeds 1%",
+      "output has 2 video streams; expected 1",
+      "output has 1 audio streams; expected 0",
+      "output has 0 subtitle streams; expected 1",
+      "output is missing required provenance",
+    ]);
+  });
 });

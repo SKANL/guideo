@@ -127,8 +127,10 @@ class FakeVoiceGen implements VoiceGen {
 }
 
 class FakeMediaProbe implements MediaProbe {
+  constructor(private readonly hasAudio: () => boolean) {}
+
   async probe(_path: string): Promise<MediaProbeResult> {
-    return { durationMs: 1500, hasVideo: true, hasAudio: true };
+    return { durationMs: 1500, hasVideo: true, hasAudio: this.hasAudio() };
   }
 }
 
@@ -176,7 +178,7 @@ function makeContainer(): {
       sceneAssembler,
       voiceGen: voice,
       platformProfile: profile,
-      mediaProbe: new FakeMediaProbe(),
+      mediaProbe: new FakeMediaProbe(() => profile.lastParams?.narration !== "subtitles" && profile.lastParams?.narration !== "silent"),
     },
     target,
     scriptGen,
@@ -349,6 +351,7 @@ describe("runCli", () => {
       sink.printErr,
     );
 
+    if (code !== 0) throw new Error(sink.errLines.join("\n"));
     expect(code).toBe(0);
     expect(engine.captureCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(0);

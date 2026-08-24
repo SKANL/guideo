@@ -7,7 +7,8 @@ import type { FinalVideo } from "../../domain/models/media.js";
 import type { NarrationMode } from "../../domain/models/narration-mode.js";
 import { parseScript } from "../../domain/models/script.js";
 import { parseStoryboard } from "../../domain/models/storyboard.js";
-import { render } from "../../domain/pipeline/pipeline.js";
+import { buildCanonicalTimeline, evaluateTimelineQuality } from "../../domain/timeline/canonical-timeline.js";
+import { renderWithContext } from "../../domain/pipeline/pipeline.js";
 import type { EffectsEngine } from "../../domain/ports/effects.js";
 import type { PlatformProfile } from "../../domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../domain/ports/preroll-trimmer.js";
@@ -47,11 +48,6 @@ export async function runRender(
       .map((step) => step.narrationSegmentId),
   );
   const visibleSegments = script.segments.filter((segment) => visibleSegmentIds.has(segment.id));
-  const captionSegments = visibleSegments.map((segment, index) => ({
-    text: segment.text,
-    startMs: visibleSegments.slice(0, index).reduce((total, item) => total + item.timing.durationMs, 0),
-    durationMs: segment.timing.durationMs,
-  }));
   const reservation = await container.usageLedger?.reserve({ operation: "render", estimate: { unit: "usd-micros", amount: 0 } });
   const token = randomUUID();
   const temporaryVideoPath = join(dirname(paths.outputPath), `.${token}.mp4`);
@@ -60,8 +56,14 @@ export async function runRender(
   try {
     await mkdir(dirname(paths.outputPath), { recursive: true });
     await mkdir(dirname(paths.captionsPath), { recursive: true });
-    const video = await render(container, approved, script, temporaryVideoPath, { narration });
+    const rendered = await renderWithContext(container, approved, script, temporaryVideoPath, { narration });
+    const video = rendered.video;
     externalWorkCompleted = true;
+    const speech = rendered.context.audioTracks.flatMap((audio) => audio.speech ? [{ segmentId: audio.segmentId, ...audio.speech, ...(audio.provenance ? { provenance: audio.provenance } : {}) }] : []);
+    const timeline = buildCanonicalTimeline({ script: { segments: visibleSegments }, speech });
+    const timelineQuality = evaluateTimelineQuality(timeline);
+    if (timelineQuality.status === "failed") throw new Error(`timeline quality gate failed: ${timelineQuality.failures.join("; ")}`);
+    const captionSegments = timeline.captions.map((caption) => ({ text: caption.text, startMs: caption.startMs, durationMs: caption.endMs - caption.startMs }));
     await writeFile(temporaryCaptionsPath, toSrt(captionSegments), "utf8");
     if (container.mediaProbe) assertQuality(await container.mediaProbe.probe(video.path), { expectedDurationMs: visibleSegments.reduce((total, segment) => total + segment.timing.durationMs, 0), minimumDurationRatio: 0.9, expectedSegments: visibleSegments.length, actualSegments: visibleSegmentIds.size, narration, captionsRequired: true, hasCaptions: (await readFile(temporaryCaptionsPath, "utf8")).trim().length > 0 });
     let provenance: FinalVideo["provenance"];

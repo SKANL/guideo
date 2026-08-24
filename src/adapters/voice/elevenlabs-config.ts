@@ -16,6 +16,8 @@ export interface VoiceCalibration {
   readonly speed: number;
   /** Account-specific USD micros charged per input character. */
   readonly costPerCharacterMicros: number;
+  /** Optional provider seed, retained in provenance when configured. */
+  readonly seed?: number;
 }
 
 export const DEFAULT_VOICE_CALIBRATION: VoiceCalibration = {

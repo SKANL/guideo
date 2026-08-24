@@ -81,6 +81,54 @@ describe("ElevenLabsVoice", () => {
     });
   });
 
+  it("preserves provider word timing and complete audio provenance when the provider exposes alignment", async () => {
+    const voice = new ElevenLabsVoice({
+      textToSpeech: {
+        convert: async () => bytesToStream(new Uint8Array(0)),
+        convertWithTimestamps: async () => ({
+          audio: bytesToStream(new Uint8Array([1, 2, 3])),
+          alignment: {
+            characters: ["G", "o", " ", "n", "o", "w"],
+            characterStartTimesSeconds: [0, 0.1, 0.2, 0.3, 0.4, 0.5],
+            characterEndTimesSeconds: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+          },
+        }),
+      },
+    }, { voiceId: "voice-1", modelId: "model-1", seed: 7, costPerCharacterMicros: 3 });
+
+    const result = await voice.synthesizeWithUsage({ id: "seg-1", text: "Go now", timing: { startMs: 1_000, durationMs: 900 } });
+
+    expect(result.audio.speech).toEqual({
+      approximate: false,
+      words: [
+        { text: "Go", startMs: 1_000, endMs: 1_200 },
+        { text: "now", startMs: 1_300, endMs: 1_600 },
+      ],
+    });
+    expect(result.audio.provenance).toMatchObject({
+      audioSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      provider: "elevenlabs",
+      model: "model-1",
+      voiceId: "voice-1",
+      seed: 7,
+      measuredCost: { unit: "usd-micros", amount: 18, cache: "miss" },
+    });
+  });
+
+  it("marks deterministic timing as approximate when provider alignment is unavailable", async () => {
+    const voice = new ElevenLabsVoice(fakeClient(async () => bytesToStream(new Uint8Array(0))));
+
+    const audio = await voice.synthesize({ id: "seg-1", text: "Go now", timing: { startMs: 0, durationMs: 900 } });
+
+    expect(audio.speech).toEqual({
+      approximate: true,
+      words: [
+        { text: "Go", startMs: 0, endMs: 450 },
+        { text: "now", startMs: 450, endMs: 900 },
+      ],
+    });
+  });
+
   it("propagates the configured voice/model/calibration knobs to the client call", async () => {
     const convert = vi.fn(async () => bytesToStream(new Uint8Array(0)));
     const voice = new ElevenLabsVoice(fakeClient(convert), {

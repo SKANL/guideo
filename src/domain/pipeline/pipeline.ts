@@ -68,6 +68,7 @@ export interface RenderContext {
   // stage, since PipelineStage.run() must always return a RenderContext, never a bare FinalVideo.
   readonly finalVideo: FinalVideo | null;
 }
+export interface RenderResult { readonly video: FinalVideo; readonly context: RenderContext; }
 
 // PipelineStage: one composable render step. `name` identifies it for logging/tests (e.g.
 // asserting stage order); run() takes the current context and returns the next one.
@@ -281,6 +282,18 @@ export async function render(
   options: RenderOptions = {},
   stages: readonly PipelineStage[] = defaultRenderStages(ports),
 ): Promise<FinalVideo> {
+  return (await renderWithContext(ports, approved, script, outputPath, options, stages)).video;
+}
+
+/** Additive result API: callers that need synthesis metadata can inspect the terminal context. */
+export async function renderWithContext(
+  ports: RenderPorts,
+  approved: ApprovedStoryboard,
+  script: Script,
+  outputPath: string,
+  options: RenderOptions = {},
+  stages: readonly PipelineStage[] = defaultRenderStages(ports),
+): Promise<RenderResult> {
   let ctx: RenderContext = {
     approved,
     script,
@@ -302,5 +315,5 @@ export async function render(
       "render(): stage list finished without producing a FinalVideo (missing a compose stage?)",
     );
   }
-  return ctx.finalVideo;
+  return { video: ctx.finalVideo, context: ctx };
 }

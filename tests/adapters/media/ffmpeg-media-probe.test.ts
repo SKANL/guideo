@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FfmpegMediaProbe } from "../../../src/adapters/media/ffmpeg-media-probe.js";
 
 describe("FfmpegMediaProbe", () => {
@@ -23,5 +23,13 @@ describe("FfmpegMediaProbe", () => {
     const probe = new FfmpegMediaProbe(async () => ({ stderr: "invalid data" }));
 
     await expect(probe.probe("broken.mp4")).rejects.toThrow("media probe failed for broken.mp4: no duration found");
+  });
+
+  it("uses an injected execFile-style boundary with a literal argv and parses all stream counts", async () => {
+    const exec = vi.fn(async () => ({ stdout: JSON.stringify({ format: { duration: "2.5" }, streams: [{ codec_type: "video", codec_name: "h264", width: 1920, height: 1080 }, { codec_type: "audio", codec_name: "aac" }, { codec_type: "subtitle", codec_name: "mov_text" }] }) }));
+    const result = await new FfmpegMediaProbe(exec).probe("unsafe; rm -rf / .mp4");
+
+    expect(exec).toHaveBeenCalledWith("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name,width,height", "-of", "json", "unsafe; rm -rf / .mp4"]);
+    expect(result).toMatchObject({ durationMs: 2_500, videoStreams: 1, audioStreams: 1, subtitleStreams: 1, videoCodec: "h264", audioCodec: "aac", width: 1920, height: 1080 });
   });
 });

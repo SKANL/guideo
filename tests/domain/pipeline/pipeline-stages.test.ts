@@ -203,4 +203,10 @@ describe("pipeline stage composition", () => {
 
     expect(events).toEqual(["reserve", "with-usage", "commit:42"]);
   });
+  it("does not invoke voice generation in no-voice modes", async () => {
+    let calls = 0;
+    const voice: VoiceGen = { async synthesize(segment) { calls += 1; return { segmentId: segment.id, path: "voice.mp3", durationMs: 1_000 }; } };
+    await render({ ...makePorts(), voiceGen: voice }, makeApproved(), script, "final.mp4", { narration: "silent" });
+    expect(calls).toBe(0);
+  });
 });

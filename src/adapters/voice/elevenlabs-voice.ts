@@ -6,7 +6,7 @@
 // lazily build a real one from process.env.ELEVENLABS_API_KEY (loaded via `node --env-file`,
 // per design), throwing a clear error if the key is missing — never at import time.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,7 +44,17 @@ export interface ElevenLabsSdkClient {
       voiceId: string,
       request: ElevenLabsTextToSpeechRequest,
     ): Promise<ReadableStream<Uint8Array>>;
+    convertWithTimestamps?(
+      voiceId: string,
+      request: ElevenLabsTextToSpeechRequest,
+    ): Promise<unknown>;
   };
+}
+
+export interface ElevenLabsAlignment {
+  readonly characters: readonly string[];
+  readonly characterStartTimesSeconds: readonly number[];
+  readonly characterEndTimesSeconds: readonly number[];
 }
 
 // mp3_<sampleRate>_<kbps> is the only output-format family this adapter can derive an exact
@@ -84,6 +94,10 @@ export class ElevenLabsVoice implements VoiceGen {
   }
 
   async synthesize(segment: NarrationSegment): Promise<Audio> {
+    return (await this.synthesizeResult(segment)).audio;
+  }
+
+  private async synthesizeResult(segment: NarrationSegment): Promise<{ audio: Audio; voiceId: string }> {
     const client = this.injectedClient ?? this.getOrCreateDefaultClient();
     const { modelId, outputFormat, stability, similarityBoost, style, useSpeakerBoost, speed } =
       this.calibration;
@@ -92,13 +106,21 @@ export class ElevenLabsVoice implements VoiceGen {
     const voiceId = process.env.GUIDEO_VOICE_ID || this.calibration.voiceId;
 
     let stream: ReadableStream<Uint8Array>;
+    let alignment: ElevenLabsAlignment | undefined;
     try {
-      stream = await client.textToSpeech.convert(voiceId, {
+      const request = {
         text: segment.text,
         modelId,
         outputFormat,
         voiceSettings: { stability, similarityBoost, style, useSpeakerBoost, speed },
-      });
+      };
+      if (client.textToSpeech.convertWithTimestamps) {
+        const response = await client.textToSpeech.convertWithTimestamps(voiceId, request) as { readonly audio: ReadableStream<Uint8Array>; readonly alignment?: ElevenLabsAlignment };
+        stream = response.audio;
+        alignment = response.alignment;
+      } else {
+        stream = await client.textToSpeech.convert(voiceId, request);
+      }
     } catch (error) {
       throw new Error(
         `ElevenLabs synthesis failed for segment "${segment.id}": ${error instanceof Error ? error.message : String(error)}`,
@@ -110,19 +132,27 @@ export class ElevenLabsVoice implements VoiceGen {
     const path = join(workDir, `${segment.id}-${randomUUID()}.mp3`);
     await writeFile(path, bytes);
 
-    const audio = {
+    const durationMs = estimateDurationMs(bytes.length, outputFormat, segment.timing.durationMs);
+    const speech = alignment ? providerWords(alignment, segment.timing.startMs) : approximateWords(segment.text, segment.timing.startMs, segment.timing.durationMs);
+    const audio: Audio = {
       segmentId: segment.id,
       path,
-      durationMs: estimateDurationMs(bytes.length, outputFormat, segment.timing.durationMs),
+      durationMs,
+      speech: { approximate: !alignment, words: speech },
+      provenance: {
+        audioSha256: createHash("sha256").update(bytes).digest("hex"), provider: "elevenlabs", model: modelId,
+        voiceId, ...(this.calibration.seed === undefined ? {} : { seed: this.calibration.seed }),
+        measuredCost: { unit: "usd-micros", amount: segment.text.length * this.calibration.costPerCharacterMicros, cache: "miss" },
+      },
     };
-    return audio;
+    return { audio, voiceId };
   }
 
   async synthesizeWithUsage(segment: NarrationSegment): Promise<{ audio: Audio; usage: UsageResult }> {
     if (!Number.isSafeInteger(this.calibration.costPerCharacterMicros) || this.calibration.costPerCharacterMicros <= 0) {
       throw new Error("ElevenLabs provider-cost accounting requires a positive costPerCharacterMicros calibration");
     }
-    const audio = await this.synthesize(segment);
+    const { audio } = await this.synthesizeResult(segment);
     return { audio, usage: { unit: "usd-micros", amount: segment.text.length * this.calibration.costPerCharacterMicros, cache: "miss", provider: "elevenlabs", model: this.calibration.modelId, characters: segment.text.length } };
   }
 
@@ -142,7 +172,28 @@ export class ElevenLabsVoice implements VoiceGen {
         "ELEVENLABS_API_KEY is not set. Load it via `node --env-file=.env` (or export it) before synthesizing.",
       );
     }
-    this.defaultClient = new ElevenLabsClient({ apiKey });
+    this.defaultClient = new ElevenLabsClient({ apiKey }) as unknown as ElevenLabsSdkClient;
     return this.defaultClient;
   }
+}
+
+function approximateWords(text: string, startMs: number, durationMs: number) {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const width = Math.floor(durationMs / Math.max(words.length, 1));
+  return words.map((word, index) => ({ text: word, startMs: startMs + index * width, endMs: index === words.length - 1 ? startMs + durationMs : startMs + (index + 1) * width }));
+}
+
+function providerWords(alignment: ElevenLabsAlignment, offsetMs: number) {
+  const words: { text: string; startMs: number; endMs: number }[] = [];
+  let text = ""; let startMs = 0; let endMs = 0;
+  const commit = () => { if (text) words.push({ text, startMs, endMs }); text = ""; };
+  alignment.characters.forEach((character, index) => {
+    const start = Math.round((alignment.characterStartTimesSeconds[index] ?? 0) * 1000) + offsetMs;
+    const end = Math.round((alignment.characterEndTimesSeconds[index] ?? 0) * 1000) + offsetMs;
+    if (/\s/.test(character)) { commit(); return; }
+    if (!text) startMs = start;
+    text += character; endMs = end;
+  });
+  commit();
+  return words;
 }
