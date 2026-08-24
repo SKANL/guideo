@@ -1,0 +1,26 @@
+name: Guideo quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:physical-render
+      - name: Sync CodeGraph when available
+        run: if command -v codegraph >/dev/null 2>&1; then codegraph sync; else echo "CodeGraph CLI is not installed in this runner"; fi

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Guideo physical render fixture</title></head>
+  <body>
+    <main>
+      <h1>Physical render fixture</h1>
+      <p id="status">Fixture target is ready.</p>
+      <button type="button" id="continue">Continue</button>
+    </main>
+    <script>document.querySelector("#continue").addEventListener("click", () => { document.querySelector("#status").textContent = "Fixture action completed."; });</script>
+  </body>
+</html>

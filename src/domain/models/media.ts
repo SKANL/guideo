@@ -115,6 +115,19 @@ export interface Subtitle {
 export type RenderProfileName = "youtube" | "shorts" | "square";
 const RENDER_PROFILE_NAMES: readonly RenderProfileName[] = ["youtube", "shorts", "square"];
 
+export interface RenderViewport { readonly width: number; readonly height: number; }
+
+/** Canonical delivery viewports shared by composition and layout planning. */
+export const RENDER_PROFILE_VIEWPORTS: Readonly<Record<RenderProfileName, RenderViewport>> = {
+  youtube: { width: 1920, height: 1080 },
+  shorts: { width: 1080, height: 1920 },
+  square: { width: 1080, height: 1080 },
+};
+
+export function renderProfileViewport(name: RenderProfileName = "youtube"): RenderViewport {
+  return RENDER_PROFILE_VIEWPORTS[name];
+}
+
 export function parseRenderProfileName(value: string): RenderProfileName {
   if (!(RENDER_PROFILE_NAMES as readonly string[]).includes(value)) {
     throw new Error(`Invalid --profile value "${value}" (expected one of: ${RENDER_PROFILE_NAMES.join(", ")}).`);

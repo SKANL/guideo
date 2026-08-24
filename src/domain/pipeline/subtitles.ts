@@ -1,24 +1,29 @@
 import type { EffectRegion, ResolvedEffect, SceneRange, SpeechTrack, Subtitle } from "../models/media.js";
 import type { Script } from "../models/script.js";
+import { projectOccupiedRegions, selectCaptionPlacement, type CaptionPlacement, type CaptionViewport } from "./caption-layout.js";
 
 const MAX_CAPTION_LINE_LENGTH = 26;
 const MAX_CAPTION_LINES = 2;
 const MAX_CAPTION_CHARS_PER_SECOND = 20;
-const LOWER_THIRD = { x: 96, y: 510, w: 1088, h: 150 };
-
-export type CaptionPlacement = "lower-third" | "top" | "bottom-left" | "bottom-right";
+export type { CaptionPlacement } from "./caption-layout.js";
 export type PlannedSubtitle = Subtitle & { readonly placement: CaptionPlacement };
-export interface CaptionLayoutHints { readonly occupiedRegions?: readonly EffectRegion[]; }
+export interface CaptionLayoutHints {
+  readonly occupiedRegions?: readonly EffectRegion[];
+  /** Render-profile viewport; omitted keeps the legacy 1280x720 placement geometry. */
+  readonly viewport?: CaptionViewport;
+}
 export type CaptionLayoutHintsBySegment = ReadonlyMap<string, CaptionLayoutHints>;
 export type TimedSpeech = SpeechTrack & { readonly segmentId: string };
 
 export function captionLayoutHintsFromResolvedEffects(
   resolvedEffects: readonly ResolvedEffect[] | undefined,
+  viewport?: CaptionViewport,
 ): CaptionLayoutHintsBySegment {
   const bySegment = new Map<string, EffectRegion[]>();
   for (const effect of resolvedEffects ?? []) {
     if (effect.region === null) continue;
-    bySegment.set(effect.narrationSegmentId, [...(bySegment.get(effect.narrationSegmentId) ?? []), effect.region]);
+    const region = viewport ? projectOccupiedRegions([effect.region], viewport)[0]! : effect.region;
+    bySegment.set(effect.narrationSegmentId, [...(bySegment.get(effect.narrationSegmentId) ?? []), region]);
   }
   return new Map([...bySegment].map(([segmentId, occupiedRegions]) => [segmentId, { occupiedRegions }]));
 }
@@ -48,13 +53,8 @@ function captionCues(text: string): string[] {
     return cues;
   });
 }
-function intersects(a: EffectRegion, b: EffectRegion): boolean {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
 function placementFor(hints: CaptionLayoutHints): CaptionPlacement {
-  // Lower-third is the default action-safe area. A known overlapping target/result moves the cue
-  // to the top rather than covering the proof the viewer needs to see.
-  return hints.occupiedRegions?.some((region) => intersects(region, LOWER_THIRD)) ? "top" : "lower-third";
+  return selectCaptionPlacement(hints.occupiedRegions, hints.viewport);
 }
 function caption(text: string, startMs: number, durationMs: number, placement: CaptionPlacement): PlannedSubtitle {
   const subtitle = { text, startMs, durationMs } as PlannedSubtitle;
@@ -88,13 +88,14 @@ function timedCues(text: string, speech: TimedSpeech | undefined): readonly { re
   }
   return readable;
 }
-export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], hints: CaptionLayoutHints | CaptionLayoutHintsBySegment = {}, speechTracks: readonly TimedSpeech[] = [], placementOverrides: ReadonlyMap<string, CaptionPlacement> = new Map()): PlannedSubtitle[] {
+export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], hints: CaptionLayoutHints | CaptionLayoutHintsBySegment = {}, speechTracks: readonly TimedSpeech[] = [], placementOverrides: ReadonlyMap<string, CaptionPlacement> = new Map(), viewport?: CaptionViewport): PlannedSubtitle[] {
   const rangeBySegmentId = new Map(scenes.map((scene) => [scene.narrationSegmentId, scene]));
   const speechBySegmentId = new Map(speechTracks.map((speech) => [speech.segmentId, speech]));
   const subtitles: PlannedSubtitle[] = [];
   for (const segment of script.segments) {
     const range = rangeBySegmentId.get(segment.id); if (!range) continue;
-    const segmentHints = hints instanceof Map ? hints.get(segment.id) ?? {} : hints;
+    const storedHints = hints instanceof Map ? hints.get(segment.id) : hints;
+    const segmentHints = viewport && !storedHints?.viewport ? { ...storedHints, viewport } : storedHints ?? {};
     const placement = placementOverrides.get(segment.id);
     const timed = timedCues(segment.text, speechBySegmentId.get(segment.id));
     if (timed) {

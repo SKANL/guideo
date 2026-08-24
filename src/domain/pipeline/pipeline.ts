@@ -1,4 +1,4 @@
-import type { Audio, FinalVideo, RawClip, RenderProfileName, Subtitle } from "../models/media.js";
+import { renderProfileViewport, type Audio, type FinalVideo, type RawClip, type RenderProfileName, type Subtitle } from "../models/media.js";
 import type { NarrationMode } from "../models/narration-mode.js";
 import type { Script } from "../models/script.js";
 import type { ApprovedStoryboard } from "../models/storyboard.js";
@@ -284,14 +284,16 @@ class DeriveSubtitlesStage implements PipelineStage {
   async run(ctx: RenderContext): Promise<RenderContext> {
     if (ctx.narration === "voice" || ctx.narration === "silent") return ctx;
     const clip = requireClip(ctx, this.name);
+    const viewport = renderProfileViewport(ctx.options.renderProfile);
     return {
       ...ctx,
       subtitles: deriveSubtitles(
         ctx.script,
         clip.scenes,
-        captionLayoutHintsFromResolvedEffects(clip.resolvedEffects),
+        captionLayoutHintsFromResolvedEffects(clip.resolvedEffects, viewport),
         ctx.audioTracks.flatMap((audio) => audio.speech ? [{ segmentId: audio.segmentId, ...audio.speech }] : []),
         new Map(ctx.approved.steps.flatMap((step) => step.director?.captionPlacement ? [[step.narrationSegmentId, step.director.captionPlacement] as const] : [])),
+        viewport,
       ),
     };
   }

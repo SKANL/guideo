@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseScript } from "../../../src/domain/models/script.js";
 import { captionLayoutHintsFromResolvedEffects, deriveSubtitles } from "../../../src/domain/pipeline/subtitles.js";
+import { resolveRenderProfile } from "../../../src/adapters/compose/render-profile.js";
 
 const script = parseScript({
   segments: [
@@ -92,5 +93,31 @@ describe("deriveSubtitles", () => {
     expect(deriveSubtitles(script, [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }], hints.get("seg-1"))).toMatchObject([
       { placement: "top" },
     ]);
+  });
+
+  it.each(["youtube", "shorts", "square"] as const)("derives a viewport-bounded lower-third safe region for the %s render profile", (profileName) => {
+    const viewport = resolveRenderProfile(profileName).viewport;
+    const subtitles = deriveSubtitles(
+      script,
+      [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }],
+      { viewport },
+    );
+
+    expect(subtitles[0]).toMatchObject({ placement: "lower-third" });
+  });
+
+  it("uses the least-occupied profile-safe region in a deterministic order", () => {
+    const viewport = resolveRenderProfile("shorts").viewport;
+    const occupiedRegions = [
+      { x: 0, y: 1_250, w: viewport.width, h: 670 },
+      { x: 0, y: 0, w: viewport.width, h: 520 },
+      { x: 0, y: 1_250, w: 540, h: 670 },
+    ];
+
+    const first = deriveSubtitles(script, [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }], { viewport, occupiedRegions });
+    const second = deriveSubtitles(script, [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }], { viewport, occupiedRegions: [...occupiedRegions].reverse() });
+
+    expect(first[0]).toMatchObject({ placement: "bottom-right" });
+    expect(second).toEqual(first);
   });
 });

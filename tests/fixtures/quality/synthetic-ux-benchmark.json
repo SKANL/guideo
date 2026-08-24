@@ -1,0 +1,13 @@
+{
+  "schema": "guideo.ux-benchmark",
+  "version": 1,
+  "synthetic": true,
+  "purpose": "Synthetic baseline designed for later replacement with real user data; it does not make user-performance claims.",
+  "cases": [
+    { "id": "caption-risk", "input": { "targetComprehension": 0.8, "resultComprehension": 0.8, "captionDistraction": 0.3, "professionalismTrust": 0.8, "retentionProxy": 0.8 } },
+    { "id": "clear-success", "input": { "targetComprehension": 0.9, "resultComprehension": 0.9, "captionDistraction": 0.1, "professionalismTrust": 0.9, "retentionProxy": 0.8 } }
+  ]
+}
+
+
+

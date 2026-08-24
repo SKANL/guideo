@@ -1,9 +1,9 @@
-import type { DeliveryAspectRatio, RenderProfileName } from "../../domain/models/media.js";
+import { renderProfileViewport, type DeliveryAspectRatio, type RenderProfileName, type RenderViewport } from "../../domain/models/media.js";
 
 export interface RenderProfile {
   readonly name: RenderProfileName;
   readonly aspectRatio: DeliveryAspectRatio;
-  readonly viewport: { readonly width: number; readonly height: number };
+  readonly viewport: RenderViewport;
   readonly deviceScaleFactor: number;
   /** Caption coordinates are per profile; the composer never applies one global alignment. */
   readonly captionZones: Readonly<Record<"lower-third" | "top" | "bottom-left" | "bottom-right", { readonly x: number; readonly y: number }>>;
@@ -24,7 +24,7 @@ export interface RenderProfile {
 export const PROFESSIONAL_RENDER_PROFILE: RenderProfile = {
   name: "youtube",
   aspectRatio: "16:9",
-  viewport: { width: 1920, height: 1080 },
+  viewport: renderProfileViewport("youtube"),
   deviceScaleFactor: 1,
   // Keep 1280×720 source-space defaults byte-compatible for existing 16:9 SRT consumers.
   captionZones: { "lower-third": { x: 640, y: 630 }, top: { x: 640, y: 40 }, "bottom-left": { x: 72, y: 630 }, "bottom-right": { x: 1_208, y: 630 } },
@@ -44,7 +44,7 @@ export const SHORTS_RENDER_PROFILE: RenderProfile = {
   ...PROFESSIONAL_RENDER_PROFILE,
   name: "shorts",
   aspectRatio: "9:16",
-  viewport: { width: 1080, height: 1920 },
+  viewport: renderProfileViewport("shorts"),
   captionZones: { "lower-third": { x: 540, y: 1_650 }, top: { x: 540, y: 160 }, "bottom-left": { x: 90, y: 1_650 }, "bottom-right": { x: 990, y: 1_650 } },
 };
 
@@ -52,7 +52,7 @@ export const SQUARE_RENDER_PROFILE: RenderProfile = {
   ...PROFESSIONAL_RENDER_PROFILE,
   name: "square",
   aspectRatio: "1:1",
-  viewport: { width: 1080, height: 1080 },
+  viewport: renderProfileViewport("square"),
   captionZones: { "lower-third": { x: 540, y: 930 }, top: { x: 540, y: 90 }, "bottom-left": { x: 90, y: 930 }, "bottom-right": { x: 990, y: 930 } },
 };
 
