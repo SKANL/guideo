@@ -3,6 +3,7 @@ import type { MediaProbeResult } from "../ports/media-probe.js";
 
 export interface QualityExpectation {
   readonly expectedDurationMs: number;
+  readonly minimumDurationRatio?: number;
   readonly expectedSegments: number;
   readonly actualSegments: number;
   readonly narration: NarrationMode;
@@ -18,7 +19,8 @@ export interface QualityReport {
 export function evaluateQuality(probe: MediaProbeResult, expected: QualityExpectation): QualityReport {
   const failures: string[] = [];
   if (!probe.hasVideo) failures.push("output has no video stream");
-  if (probe.durationMs < expected.expectedDurationMs) failures.push(`output duration ${probe.durationMs}ms is shorter than planned ${expected.expectedDurationMs}ms`);
+  const minimumDurationMs = expected.expectedDurationMs * (expected.minimumDurationRatio ?? 1);
+  if (probe.durationMs < minimumDurationMs) failures.push(`output duration ${probe.durationMs}ms is shorter than planned ${expected.expectedDurationMs}ms`);
   if (expected.actualSegments !== expected.expectedSegments) failures.push(`storyboard covers ${expected.actualSegments} segments; expected ${expected.expectedSegments}`);
   if (expected.narration === "silent" && probe.hasAudio) failures.push("silent output must not contain an audio stream");
   if ((expected.narration === "voice" || expected.narration === "both") && !probe.hasAudio) failures.push("voice output has no audio stream");

@@ -37,6 +37,7 @@ import {
   isExecutionContextDestroyedError,
   login,
   readTargetEnvOrThrow,
+  resolveLoginConfig,
 } from "../target/login.js";
 import type { PatchrightElementHandle, PatchrightPage } from "../target/url-creds-target.js";
 import { type CaptureConfig, DEFAULT_CAPTURE_CONFIG } from "./capture-config.js";
@@ -221,7 +222,7 @@ export class WebRecordingEngine implements RecordingEngine {
       // Authenticate the SAME way discovery does (shared login.ts — see its bug-fix history)
       // BEFORE running any storyboard step, so clicks on authenticated routes don't time out.
       const env = readTargetEnvOrThrow();
-      await login(page, env, this.loginConfig);
+      await login(page, env, resolveLoginConfig(this.loginConfig));
       // Real e2e finding: an onboarding/welcome dialog covers the nav right after login and
       // intercepts every click's actionability check — clear it before driving any step.
       await this.dismissOverlays(page);

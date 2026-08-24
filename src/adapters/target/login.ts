@@ -121,6 +121,15 @@ export const DEFAULT_LOGIN_CONFIG: LoginConfig = {
     '[role="alert"], [data-testid="auth-error"], .error, .alert-error, .alert-danger',
 };
 
+export function resolveLoginConfig(config: LoginConfig): LoginConfig {
+  return {
+    ...config,
+    usernameSelector: process.env.GUIDEO_LOGIN_USERNAME_SELECTOR ?? config.usernameSelector,
+    passwordSelector: process.env.GUIDEO_LOGIN_PASSWORD_SELECTOR ?? config.passwordSelector,
+    submitSelector: process.env.GUIDEO_LOGIN_SUBMIT_SELECTOR ?? config.submitSelector,
+  };
+}
+
 export function normalizeUrl(url: string): string {
   const parsed = new URL(url);
   return `${parsed.origin}${parsed.pathname}`;

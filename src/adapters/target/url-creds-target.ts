@@ -32,6 +32,7 @@ import {
   login,
   normalizeUrl,
   readTargetEnvOrThrow,
+  resolveLoginConfig,
 } from "./login.js";
 
 export type {
@@ -123,7 +124,7 @@ export class UrlCredsTarget implements Target {
       // Shared login (see ./login.js): SAME hydration-aware fill + URL-change-first success
       // detection + real-text-only error detection used by capture (WebRecordingEngine). This
       // adapter's DiscoveryConfig structurally satisfies LoginConfig (superset of its fields).
-      await login(page, env, this.config);
+      await login(page, env, resolveLoginConfig(this.config));
       const graph = parseFlowGraph(await this.crawl(page, page.url() || env.url));
       await this.persist(graph);
       return graph;

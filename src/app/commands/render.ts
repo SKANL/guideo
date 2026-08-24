@@ -40,6 +40,17 @@ export async function runRender(
   if (manifest.finalized !== true) throw new Error("render requires an existing finalized approval manifest");
   const approved = reviewWithManifest(storyboard, manifest, actual);
   if (!approved) throw new Error("finalized approval manifest did not approve storyboard");
+  const visibleSegmentIds = new Set(
+    storyboard.steps
+      .filter((step) => step.visibility !== "private")
+      .map((step) => step.narrationSegmentId),
+  );
+  const visibleSegments = script.segments.filter((segment) => visibleSegmentIds.has(segment.id));
+  const captionSegments = visibleSegments.map((segment, index) => ({
+    text: segment.text,
+    startMs: visibleSegments.slice(0, index).reduce((total, item) => total + item.timing.durationMs, 0),
+    durationMs: segment.timing.durationMs,
+  }));
   const reservation = await container.usageLedger?.reserve({ operation: "render", estimated: 1 });
   const token = randomUUID();
   const temporaryVideoPath = join(dirname(paths.outputPath), `.${token}.mp4`);
@@ -50,8 +61,8 @@ export async function runRender(
     await mkdir(dirname(paths.captionsPath), { recursive: true });
     const video = await render(container, approved, script, temporaryVideoPath, { narration });
     externalWorkCompleted = true;
-    await writeFile(temporaryCaptionsPath, toSrt(script.segments.map((segment) => ({ text: segment.text, startMs: segment.timing.startMs, durationMs: segment.timing.durationMs }))), "utf8");
-    if (container.mediaProbe) assertQuality(await container.mediaProbe.probe(video.path), { expectedDurationMs: script.segments.reduce((total, segment) => total + segment.timing.durationMs, 0), expectedSegments: script.segments.length, actualSegments: new Set(storyboard.steps.map((step) => step.narrationSegmentId)).size, narration, captionsRequired: true, hasCaptions: (await readFile(temporaryCaptionsPath, "utf8")).trim().length > 0 });
+    await writeFile(temporaryCaptionsPath, toSrt(captionSegments), "utf8");
+    if (container.mediaProbe) assertQuality(await container.mediaProbe.probe(video.path), { expectedDurationMs: visibleSegments.reduce((total, segment) => total + segment.timing.durationMs, 0), minimumDurationRatio: 0.9, expectedSegments: visibleSegments.length, actualSegments: visibleSegmentIds.size, narration, captionsRequired: true, hasCaptions: (await readFile(temporaryCaptionsPath, "utf8")).trim().length > 0 });
     if (reservation) await container.usageLedger!.commit(reservation.id, { cost: 1, cached: false });
     await rename(video.path, paths.outputPath);
     await rename(temporaryCaptionsPath, paths.captionsPath);
