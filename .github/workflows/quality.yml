@@ -18,9 +18,14 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Install ffmpeg and ffprobe
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Verify ffprobe
+        run: ffprobe -version
       - run: npm ci
+      - run: npm run lint:physical-render
       - run: npm run typecheck
       - run: npm test
-      - run: npm run test:physical-render
+      - run: npm run test:physical-render:matrix
       - name: Sync CodeGraph when available
         run: if command -v codegraph >/dev/null 2>&1; then codegraph sync; else echo "CodeGraph CLI is not installed in this runner"; fi

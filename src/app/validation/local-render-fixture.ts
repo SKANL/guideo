@@ -10,7 +10,7 @@ export interface LocalRenderFixture {
 /** A login-free target and deterministic artifact locations for local physical render checks. */
 export function localRenderFixture(cwd: string = process.cwd()): LocalRenderFixture {
   return {
-    targetUrl: pathToFileURL(resolve(cwd, "tests/fixtures/physical-render/target.html")).href,
+    targetUrl: pathToFileURL(resolve(cwd, "tests/fixtures/physical-render-target/index.html")).href,
     recordingPath: resolve(cwd, ".guideo/fixtures/local-render.mp4"),
     captionsPath: resolve(cwd, ".guideo/fixtures/local-render.srt"),
   };

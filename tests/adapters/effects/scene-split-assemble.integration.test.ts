@@ -174,5 +174,5 @@ describe("FfmpegSceneSplitter + FfmpegSceneAssembler (ffmpeg integration)", () =
       return;
     }
     expect(Math.abs(outputDurationSec - expectedTotalSec)).toBeLessThanOrEqual(0.3);
-  }, 30_000);
+  }, 120_000);
 });

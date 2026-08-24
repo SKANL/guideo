@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { MediaProbe, MediaProbeResult } from "../../domain/ports/media-probe.js";
+import { resolveFfprobePath } from "./ffprobe-path.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -17,12 +18,15 @@ async function defaultExec(binary: string, argv: readonly string[]): Promise<Ffm
 }
 
 export class FfmpegMediaProbe implements MediaProbe {
-  constructor(private readonly exec: FfmpegProbeExec = defaultExec) {}
+  constructor(
+    private readonly exec: FfmpegProbeExec = defaultExec,
+    private readonly ffprobePath = resolveFfprobePath(),
+  ) {}
 
   async probe(path: string): Promise<MediaProbeResult> {
     try {
       const argv = ["-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name,width,height", "-of", "json", path];
-      const result = await this.exec("ffprobe", argv);
+      const result = await this.exec(this.ffprobePath, argv);
       return parseMetadata(path, result.stdout ?? result.stderr ?? "", argv);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith(`media probe failed for ${path}:`)) throw error;

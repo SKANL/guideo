@@ -1,10 +1,12 @@
 import { parseArgs } from "node:util";
+import { join } from "node:path";
 import { parseBrief } from "../domain/models/brief.js";
 import { parseRenderProfileName } from "../domain/models/media.js";
 import { type NarrationMode, parseNarrationMode } from "../domain/models/narration-mode.js";
 import { runDiscover } from "./commands/discover.js";
 import { runPlan } from "./commands/plan.js";
 import { runRender } from "./commands/render.js";
+import { parseValidateNarration, parseValidateRenderProfile, runValidate } from "./commands/validate.js";
 import type { Container } from "./factory.js";
 import { projectPaths } from "./paths.js";
 import { defaultProjectName } from "./project-name.js";
@@ -18,6 +20,8 @@ Usage:
                                                    Plan a script + storyboard, then STOP for review
   guideo render --approve [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>]
                                                    Render the last-planned, approved storyboard
+  guideo validate [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>] [--ux-evidence <path>]
+                                                   Validate the rendered MP4/SRT and write validation-report.json
   guideo --help                                   Show this help
 
 Review gate: "plan" never captures the screen or synthesizes voice. Review the printed script +
@@ -37,6 +41,7 @@ Environment (.env, loaded via \`node --env-file=.env\`):
   GUIDEO_TARGET_URL, GUIDEO_TARGET_USERNAME, GUIDEO_TARGET_PASSWORD   required for discover/plan
   ELEVENLABS_API_KEY                                                 required for render
   GUIDEO_FFMPEG_PATH                                                 optional ffmpeg override
+  GUIDEO_FFPROBE_PATH                                                optional ffprobe override
 `;
 
 function resolveProject(explicit: string | undefined): string {
@@ -105,6 +110,16 @@ function parseRenderArgs(args: readonly string[]): {
   };
 }
 
+function parseValidateArgs(args: readonly string[]): { project: string; narration: NarrationMode; renderProfile: import("../domain/models/media.js").RenderProfileName; uxEvidencePath?: string } {
+  const { values } = parseArgs({
+    args: [...args],
+    options: { project: { type: "string" }, narration: { type: "string" }, profile: { type: "string" }, "ux-evidence": { type: "string" } },
+    strict: true,
+    allowPositionals: false,
+  });
+  return { project: resolveProject(values.project), narration: parseValidateNarration(values.narration), renderProfile: parseValidateRenderProfile(values.profile), ...(values["ux-evidence"] ? { uxEvidencePath: values["ux-evidence"] } : {}) };
+}
+
 // The testable dispatcher: command parsing + calling into the commands/ layer. Every side effect
 // (adapter construction, process.argv, process.exitCode) lives outside this function — cli.ts is
 // the only untested process shell, this is fully unit-tested with an injected Container and I/O
@@ -146,6 +161,14 @@ export async function runCli(
         const video = await runRender(container, approve, paths, narration, renderProfile);
         print(`Final video written to ${video.path}`);
         return 0;
+      }
+      case "validate": {
+        const { project, narration, renderProfile, uxEvidencePath } = parseValidateArgs(rest);
+        if (!container.mediaProbe || !container.usageLedger) throw new Error("validate requires media probe and usage ledger adapters");
+        const paths = projectPaths({ project, cwd });
+        const report = await runValidate({ mediaProbe: container.mediaProbe, usageLedger: container.usageLedger, ...(container.frameProbe ? { frameProbe: container.frameProbe } : {}) }, { paths, narration, profile: renderProfile, ...(uxEvidencePath ? { uxEvidencePath } : {}) });
+        print(`Validation report written to ${join(paths.guideoDir, "validation-report.json")}`);
+        return report.status === "passed" ? 0 : 1;
       }
       default: {
         printErr(`Unknown command "${command}".\n\n${USAGE}`);

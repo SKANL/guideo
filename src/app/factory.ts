@@ -27,8 +27,10 @@ import type { Target } from "../domain/ports/target.js";
 import type { VoiceGen } from "../domain/ports/voice-gen.js";
 import type { MediaProbe } from "../domain/ports/media-probe.js";
 import type { UsageLedger } from "../domain/ports/usage-ledger.js";
+import type { FrameCheckpointProbe } from "../domain/ports/frame-checkpoint-probe.js";
 import { FileUsageLedger } from "../adapters/usage/file-usage-ledger.js";
 import { FileCaptureCheckpointStore } from "../adapters/recording/file-capture-checkpoint-store.js";
+import { FfmpegFrameCheckpointProbe } from "../adapters/media/ffmpeg-frame-checkpoint-probe.js";
 import { FsArtifactStore } from "../adapters/storage/fs-artifact-store.js";
 import type { ArtifactStore } from "../domain/ports/artifact-store.js";
 import { join } from "node:path";
@@ -54,6 +56,7 @@ export interface Container {
   readonly mediaProbe?: MediaProbe;
   readonly artifactStore?: ArtifactStore;
   readonly usageLedger?: UsageLedger;
+  readonly frameProbe?: FrameCheckpointProbe;
 }
 
 // Every field is independently overridable (tests inject fakes for one or more ports; the rest
@@ -73,5 +76,6 @@ export function createContainer(overrides: Partial<Container> = {}): Container {
     mediaProbe: overrides.mediaProbe ?? new FfmpegMediaProbe(),
     artifactStore: overrides.artifactStore ?? new FsArtifactStore(join(process.cwd(), ".guideo", "artifacts")),
     usageLedger: overrides.usageLedger ?? new FileUsageLedger(join(process.cwd(), ".guideo", "usage.json"), { limit: usageLimitFromEnv() }),
+    frameProbe: overrides.frameProbe ?? new FfmpegFrameCheckpointProbe(),
   };
 }
