@@ -19,7 +19,7 @@ import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
 
 const graph = parseFlowGraph({
   nodes: [
-    { id: "n1", feature: "invite", useCase: "invite a teammate", preconditions: [], selectors: {} },
+    { id: "n1", feature: "invite", useCase: "invite a teammate", preconditions: [], selectors: { invite: "#invite-btn" } },
   ],
   edges: [],
 });
@@ -172,6 +172,24 @@ describe("runPlan", () => {
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
 
     await expect(runPlan({ scriptGen }, brief, paths)).rejects.toThrow(/guideo discover/);
+  });
+
+  it("refuses to persist a generated storyboard with an unknown selector", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeGraph(paths);
+    const scriptGen: ScriptGen = {
+      async generate() {
+        return {
+          script: parseScript({ segments: [{ id: "seg-1", text: "Click.", timing: { startMs: 0, durationMs: 1000 } }] }),
+          storyboard: parseStoryboard({ steps: [{ action: "click", selector: "#invented", narrationSegmentId: "seg-1" }] }),
+        };
+      },
+    };
+
+    await expect(runPlan({ scriptGen }, parseBrief({ idea: "Show invite", targetPlatform: "youtube" }), paths)).rejects.toThrow(/not present.*Discover/i);
+    await expect(readFile(paths.storyboardPath, "utf8")).rejects.toThrow();
+    await expect(readFile(paths.approvalManifestPath, "utf8")).rejects.toThrow();
   });
 
   it("keeps motion opt-in when writing the storyboard for the REVIEW gate", async () => {

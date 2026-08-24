@@ -69,6 +69,21 @@ describe("ClaudeAgentScriptGen", () => {
     expect(JSON.stringify(schema)).not.toContain("json-schema.org/draft/2020-12");
   });
 
+  it("hands the SDK a schema that requires selectors for click/type/hover/zoom steps", async () => {
+    const { fn, calls } = fakeQueryFn(validOutput);
+    await new ClaudeAgentScriptGen(fn).generate(brief, routes);
+
+    const schemaText = JSON.stringify(calls[0]?.options?.outputFormat?.schema);
+    expect(schemaText).toContain('"selector"');
+    expect(schemaText).toContain('"action"');
+    expect(schemaText).toContain('"click"');
+    expect(schemaText).toContain('"type"');
+    expect(schemaText).toContain('"hover"');
+    expect(schemaText).toContain('"zoom"');
+    expect(schemaText).toContain('"allOf"');
+    expect(schemaText).toContain('"required":["selector"]');
+  });
+
   it("builds a prompt containing the brief + route subset and returns validated script + storyboard", async () => {
     const { fn, calls } = fakeQueryFn(validOutput);
     const scriptGen = new ClaudeAgentScriptGen(fn);

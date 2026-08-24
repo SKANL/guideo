@@ -35,7 +35,36 @@ function toClaudeJsonSchema(schema: z.ZodType): Record<string, unknown> {
   return json;
 }
 
-const OUTPUT_JSON_SCHEMA: Record<string, unknown> = toClaudeJsonSchema(OutputSchema);
+function addProviderSelectorRequirements(schema: Record<string, unknown>): Record<string, unknown> {
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!value || typeof value !== "object") return value;
+    const object = value as Record<string, unknown>;
+    const properties = object.properties;
+    const next = Object.fromEntries(Object.entries(object).map(([key, entry]) => [key, visit(entry)]));
+    if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+      const stepProperties = properties as Record<string, unknown>;
+      if ("action" in stepProperties && "selector" in stepProperties) {
+        next.allOf = [
+          ...(Array.isArray(next.allOf) ? next.allOf : []),
+          {
+            if: {
+              properties: { action: { enum: ["click", "type", "hover", "zoom"] } },
+              required: ["action"],
+            },
+            then: { required: ["selector"] },
+          },
+        ];
+      }
+    }
+    return next;
+  };
+  return visit(schema) as Record<string, unknown>;
+}
+
+const OUTPUT_JSON_SCHEMA: Record<string, unknown> = addProviderSelectorRequirements(
+  toClaudeJsonSchema(OutputSchema),
+);
 
 // Narrow structural subset of the Claude Agent SDK's query()/SDKMessage surface — only the fields
 // this adapter reads off the terminal `type: "result"` message. The real SDK's `query` function

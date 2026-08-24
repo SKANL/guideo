@@ -29,6 +29,10 @@ const SELECTOR_REQUIRED_ACTIONS: ReadonlySet<StepAction> = new Set([
   "zoom",
 ]);
 
+export function isSelectorRequiredAction(action: StepAction): boolean {
+  return SELECTOR_REQUIRED_ACTIONS.has(action);
+}
+
 export const StepSchema = z
   .object({
     action: StepActionSchema,
@@ -59,7 +63,7 @@ export const StepSchema = z
     }).optional(),
   })
   .superRefine((step, ctx) => {
-    if (SELECTOR_REQUIRED_ACTIONS.has(step.action) && !step.selector) {
+    if (isSelectorRequiredAction(step.action) && !step.selector) {
       ctx.addIssue({
         code: "custom",
         path: ["selector"],

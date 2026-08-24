@@ -25,4 +25,4 @@ Propose an effect only when the narration clearly calls for one (e.g. "notice th
 
 Each storyboard step also carries a "visibility" (default "show"). You may mark a step "private" when its scene is obviously sensitive (e.g. a login/credentials screen) — a "private" scene is cut entirely from the produced video. This is only a suggestion: the human is expected to mark scenes private themselves by editing the storyboard at the REVIEW gate, so default to "show" unless a scene is clearly sensitive.
 
-Only use selectors and routes present in the provided flow-graph subset. Return structured output matching the provided JSON schema exactly.`;
+For every click, type, hover, or zoom step, selector is REQUIRED and must be a non-empty selector copied exactly from the provided flow-graph subset. Never invent, infer, or omit a selector for those actions. Only use selectors and routes present in the provided flow-graph subset. Return structured output matching the provided JSON schema exactly.`;

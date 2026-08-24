@@ -7,7 +7,9 @@ import { type FlowGraph, parseFlowGraph } from "../../domain/models/flow-graph.j
 import type { Script } from "../../domain/models/script.js";
 import type { Storyboard } from "../../domain/models/storyboard.js";
 import { applyDirectorDefaults, type DirectorConfig } from "../../domain/pipeline/director.js";
+import { queryRoutes } from "../../domain/pipeline/flow-graph-query.js";
 import { plan } from "../../domain/pipeline/planning.js";
+import { bindStoryboardProvenance } from "../../domain/pipeline/storyboard-provenance.js";
 import type { ScriptGen } from "../../domain/ports/script-gen.js";
 import type { Target } from "../../domain/ports/target.js";
 import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
@@ -45,19 +47,21 @@ export async function runPlan(
   const cachedTarget: Target = { discover: async () => graph };
   const reservation = await container.usageLedger?.reserve({ operation: "plan", estimated: 1 });
   let planned: { script: Script; storyboard: Storyboard };
+  let storyboard: Storyboard;
   try {
     planned = await plan(cachedTarget, brief, container.scriptGen);
+    storyboard = bindStoryboardProvenance(planned.storyboard, queryRoutes(graph, brief));
     if (reservation)
       await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
   } catch (error) {
     if (reservation) await container.usageLedger?.release(reservation.id, "plan failed");
     throw error;
   }
-  const { script, storyboard: rawStoryboard } = planned;
+  const { script } = planned;
   const { enabled = true, ...directorConfig } = directorOptions;
-  const storyboard = enabled
-    ? applyDirectorDefaults(rawStoryboard, script, { motionEmphasisEnabled: true, ...directorConfig })
-    : rawStoryboard;
+  storyboard = enabled
+    ? applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true, ...directorConfig })
+    : storyboard;
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.scriptPath, JSON.stringify(script, null, 2), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard, null, 2), "utf8");
