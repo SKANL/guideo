@@ -109,9 +109,10 @@ export interface LoginConfig {
 }
 
 export const DEFAULT_LOGIN_CONFIG: LoginConfig = {
-  usernameSelector: 'input[type="email"], input[name="username"], input[name="email"]',
+  usernameSelector:
+    'input[type="email"], input[name="username"], input[name="email"], input#user-name',
   passwordSelector: 'input[type="password"]',
-  submitSelector: 'button[type="submit"]',
+  submitSelector: 'button[type="submit"], input#login-button',
   gotoWaitUntil: "networkidle",
   formWaitTimeoutMs: 15_000,
   loginTimeoutMs: 15_000,

@@ -75,7 +75,9 @@ function fakeSite(pages: Record<string, FakePageSpec>, postLoginUrl = HOME_URL) 
   });
   const fill = vi.fn(async () => {});
   const click = vi.fn(async (selector: string) => {
-    if (selector === SUBMIT_SELECTOR) currentUrl = postLoginUrl;
+    if (selector.split(",").map((part) => part.trim()).includes(SUBMIT_SELECTOR)) {
+      currentUrl = postLoginUrl;
+    }
   });
   const waitForSelector = vi.fn(async () => {});
   const goBack = vi.fn(async () => {});
@@ -171,7 +173,7 @@ function fakeSpaButtonNavSite() {
   });
   const fill = vi.fn(async () => {});
   const click = vi.fn(async (selector: string) => {
-    if (selector === SUBMIT_SELECTOR) {
+    if (selector.split(",").map((part) => part.trim()).includes(SUBMIT_SELECTOR)) {
       previousUrl = currentUrl;
       currentUrl = HOME_URL;
       return;
@@ -255,7 +257,7 @@ describe("UrlCredsTarget", () => {
     expect(goto).toHaveBeenCalledWith(LOGIN_URL, { waitUntil: "networkidle" });
     expect(fill).toHaveBeenCalledWith(expect.stringContaining("username"), "alice");
     expect(fill).toHaveBeenCalledWith(expect.stringContaining("password"), "s3cret");
-    expect(click).toHaveBeenCalledWith(SUBMIT_SELECTOR);
+    expect(click).toHaveBeenCalledWith(expect.stringContaining(SUBMIT_SELECTOR));
 
     expect(FlowGraphSchema.safeParse(graph).success).toBe(true);
     expect(graph.nodes.map((n) => n.id)).toContain(normalize(HOME_URL));
@@ -308,6 +310,42 @@ describe("UrlCredsTarget", () => {
         'dom:[data-testid="invite"]',
       ],
     });
+
+    await rm(outputPath, { force: true });
+  });
+
+  it("clamps a negative DOM x coordinate while preserving the visible right bound", async () => {
+    const { launcher } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [{ href: "/settings", text: "Settings", testid: "settings", box: { x: -20, y: 40, width: 120, height: 40 } }],
+      },
+      [normalize(`${BASE_URL}/settings`)]: { title: "Settings", links: [] },
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-negative-x-${Date.now()}.json`);
+
+    const graph = await new UrlCredsTarget(launcher, { outputPath, maxPages: 10 }).discover();
+
+    expect(graph.nodes.find((node) => node.id === normalize(`${BASE_URL}/settings`))?.locatorEvidence)
+      .toMatchObject({ layoutOccupancy: [{ x: 0, y: 40, w: 100, h: 40 }] });
+
+    await rm(outputPath, { force: true });
+  });
+
+  it("clamps a negative DOM y coordinate while preserving the visible bottom bound", async () => {
+    const { launcher } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [{ href: "/settings", text: "Settings", testid: "settings", box: { x: 40, y: -10, width: 120, height: 50 } }],
+      },
+      [normalize(`${BASE_URL}/settings`)]: { title: "Settings", links: [] },
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-negative-y-${Date.now()}.json`);
+
+    const graph = await new UrlCredsTarget(launcher, { outputPath, maxPages: 10 }).discover();
+
+    expect(graph.nodes.find((node) => node.id === normalize(`${BASE_URL}/settings`))?.locatorEvidence)
+      .toMatchObject({ layoutOccupancy: [{ x: 40, y: 0, w: 120, h: 40 }] });
 
     await rm(outputPath, { force: true });
   });
@@ -477,7 +515,7 @@ describe("UrlCredsTarget", () => {
       waitForSelector: async () => {},
       fill: async () => {},
       click: async (selector) => {
-        if (selector === SUBMIT_SELECTOR) currentUrl = HOME_URL;
+        if (selector.split(",").map((part) => part.trim()).includes(SUBMIT_SELECTOR)) currentUrl = HOME_URL;
       },
       goBack: async () => {},
       url: () => currentUrl,
@@ -553,7 +591,7 @@ describe("UrlCredsTarget", () => {
     const strayButton = fakeLink({ href: "", text: "Action", testid: "stray-btn" });
     let currentUrl = "";
     const click = vi.fn(async (selector: string) => {
-      if (selector === SUBMIT_SELECTOR) currentUrl = HOME_URL;
+      if (selector.split(",").map((part) => part.trim()).includes(SUBMIT_SELECTOR)) currentUrl = HOME_URL;
       // A stray button click must never happen; if it did, it would NOT navigate anyway.
     });
     const page: PatchrightPage = {
@@ -689,7 +727,7 @@ describe("UrlCredsTarget", () => {
         callOrder.push(`fill:${selector}`);
       },
       click: async (selector) => {
-        if (selector === SUBMIT_SELECTOR) currentUrl = HOME_URL;
+        if (selector.split(",").map((part) => part.trim()).includes(SUBMIT_SELECTOR)) currentUrl = HOME_URL;
         callOrder.push(`click:${selector}`);
       },
       goBack: async () => {},

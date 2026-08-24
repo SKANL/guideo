@@ -144,8 +144,16 @@ async function targetEvidenceFromDom(
   ]);
   const accessibleName = ariaLabel ?? text;
   const stableId = testId ?? id;
-  const layoutOccupancy = box && box.width > 0 && box.height > 0
-    ? [{ x: box.x, y: box.y, w: box.width, h: box.height }]
+  const visibleBox = box && box.width > 0 && box.height > 0
+    ? {
+        x: Math.max(0, box.x),
+        y: Math.max(0, box.y),
+        w: box.width - Math.max(0, -box.x),
+        h: box.height - Math.max(0, -box.y),
+      }
+    : undefined;
+  const layoutOccupancy = visibleBox && visibleBox.w > 0 && visibleBox.h > 0
+    ? [visibleBox]
     : undefined;
   const evidenceRefs = [
     `browser:${targetId}`,
