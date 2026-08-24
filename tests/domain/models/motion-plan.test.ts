@@ -104,4 +104,15 @@ describe("MotionPlan", () => {
       },
     ]);
   });
+
+  it("uses a stable selector as fallback evidence when Discover did not attach prose", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "[data-test=checkout]", narrationSegmentId: "seg-1" }],
+    });
+
+    expect(deriveMotionPlan(storyboard, script).beats[1]?.target).toEqual({
+      selector: "[data-test=checkout]",
+      evidence: "[data-test=checkout]",
+    });
+  });
 });

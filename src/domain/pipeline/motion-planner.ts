@@ -8,7 +8,8 @@ const SEMANTIC_ACTIONS = new Set(["click", "hover"]);
 
 function semanticTarget(step: StoryboardStep): MotionTarget | undefined {
   if (!SEMANTIC_ACTIONS.has(step.action) || !step.selector) return undefined;
-  const evidence = step.evidence?.reference ?? step.evidence?.locatorCandidates?.[0];
+  const evidence =
+    step.evidence?.reference ?? step.evidence?.locatorCandidates?.[0] ?? step.selector;
   return evidence ? { selector: step.selector, evidence } : undefined;
 }
 
