@@ -17,6 +17,8 @@ export type WaitUntil = "load" | "domcontentloaded" | "networkidle";
 export interface PatchrightElementHandle {
   getAttribute(name: string): Promise<string | null>;
   textContent(): Promise<string | null>;
+  /** Browser-measured DOM geometry when the element is visible. */
+  boundingBox?(): Promise<{ x: number; y: number; width: number; height: number } | null>;
 }
 
 // Narrow structural subset of patchright's Page — only what login/discovery call. `goto`/`goBack`

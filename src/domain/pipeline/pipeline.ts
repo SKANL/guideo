@@ -1,4 +1,4 @@
-import type { Audio, FinalVideo, RawClip, Subtitle } from "../models/media.js";
+import type { Audio, FinalVideo, RawClip, RenderProfileName, Subtitle } from "../models/media.js";
 import type { NarrationMode } from "../models/narration-mode.js";
 import type { Script } from "../models/script.js";
 import type { ApprovedStoryboard } from "../models/storyboard.js";
@@ -28,6 +28,8 @@ import { captionLayoutHintsFromResolvedEffects, deriveSubtitles } from "./subtit
 export interface RenderOptions {
   readonly trimPreRoll?: boolean;
   readonly narration?: NarrationMode;
+  /** Delivery composition profile; omitted preserves the established YouTube 16:9 output. */
+  readonly renderProfile?: RenderProfileName;
 }
 
 // RenderPorts: the subset of app/factory.ts's Container that the render pipeline needs. Declared
@@ -289,6 +291,7 @@ class DeriveSubtitlesStage implements PipelineStage {
         clip.scenes,
         captionLayoutHintsFromResolvedEffects(clip.resolvedEffects),
         ctx.audioTracks.flatMap((audio) => audio.speech ? [{ segmentId: audio.segmentId, ...audio.speech }] : []),
+        new Map(ctx.approved.steps.flatMap((step) => step.director?.captionPlacement ? [[step.narrationSegmentId, step.director.captionPlacement] as const] : [])),
       ),
     };
   }
@@ -308,6 +311,7 @@ class ComposeStage implements PipelineStage {
       subtitles: ctx.subtitles,
       outputPath: ctx.outputPath,
       narration: ctx.narration,
+      ...(ctx.options.renderProfile ? { renderProfile: ctx.options.renderProfile } : {}),
     });
     return { ...ctx, finalVideo };
   }

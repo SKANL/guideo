@@ -108,6 +108,67 @@ function slugify(text: string): string {
   return slug || "link";
 }
 
+const LOWER_THIRD = { x: 96, y: 510, w: 1088, h: 150 };
+
+interface TargetEvidence {
+  readonly selector: string;
+  readonly semanticTarget: {
+    readonly role: "link" | "button";
+    readonly accessibleName?: string;
+    readonly label?: string;
+    readonly testId?: string;
+  };
+  readonly layoutOccupancy?: { x: number; y: number; w: number; h: number }[];
+  readonly safeCaptionRegions?: ("lower-third" | "top")[];
+  readonly confidence: "low" | "medium" | "high";
+  readonly evidenceRefs: string[];
+}
+
+function intersectsLowerThird(region: { readonly x: number; readonly y: number; readonly w: number; readonly h: number }): boolean {
+  return region.x < LOWER_THIRD.x + LOWER_THIRD.w && region.x + region.w > LOWER_THIRD.x
+    && region.y < LOWER_THIRD.y + LOWER_THIRD.h && region.y + region.h > LOWER_THIRD.y;
+}
+
+async function targetEvidenceFromDom(
+  item: PatchrightElementHandle,
+  selector: string,
+  targetId: string,
+  href: string | null,
+  text: string | undefined,
+): Promise<TargetEvidence> {
+  const [ariaLabel, testId, id, box] = await Promise.all([
+    item.getAttribute("aria-label"),
+    item.getAttribute("data-testid"),
+    item.getAttribute("id"),
+    item.boundingBox?.(),
+  ]);
+  const accessibleName = ariaLabel ?? text;
+  const stableId = testId ?? id;
+  const layoutOccupancy = box && box.width > 0 && box.height > 0
+    ? [{ x: box.x, y: box.y, w: box.width, h: box.height }]
+    : undefined;
+  const evidenceRefs = [
+    `browser:${targetId}`,
+    `dom:${selector}`,
+    ...(accessibleName ? [`accessibility:${accessibleName}`] : []),
+  ].sort();
+  return {
+    selector,
+    semanticTarget: {
+      role: href === null ? "button" : "link",
+      ...(accessibleName ? { accessibleName } : {}),
+      ...(text ? { label: slugify(text) } : {}),
+      ...(stableId ? { testId: stableId } : {}),
+    },
+    ...(layoutOccupancy ? { layoutOccupancy } : {}),
+    ...(layoutOccupancy
+      ? { safeCaptionRegions: [intersectsLowerThird(layoutOccupancy[0]!) ? "top" : "lower-third"] }
+      : {}),
+    confidence: stableId && accessibleName && layoutOccupancy ? "high" : accessibleName || stableId ? "medium" : "low",
+    evidenceRefs,
+  };
+}
+
 export class UrlCredsTarget implements Target {
   private readonly injectedLauncher: BrowserLauncher | undefined;
   private readonly config: DiscoveryConfig;
@@ -245,6 +306,7 @@ export class UrlCredsTarget implements Target {
     const visited = new Set<string>();
     const queued = new Set<string>([normalizeUrl(startUrl)]);
     const queue: string[] = [startUrl];
+    const incomingEvidence = new Map<string, TargetEvidence[]>();
 
     // ponytail: budget enforced by this loop condition alone (visited.size < maxPages) — the
     // queue itself is left unbounded (dedup via `queued`) since the thin slice never crawls
@@ -304,6 +366,8 @@ export class UrlCredsTarget implements Target {
         selectors[slugify(text || href || targetUrl)] = selector;
         const targetId = normalizeUrl(targetUrl);
         edges.push({ from: nodeId, to: targetId, action: `click ${selector}` });
+        const evidence = await targetEvidenceFromDom(item, selector, targetId, href, text);
+        incomingEvidence.set(targetId, [...(incomingEvidence.get(targetId) ?? []), evidence]);
 
         if (!visited.has(targetId) && !queued.has(targetId)) {
           queued.add(targetId);
@@ -311,6 +375,8 @@ export class UrlCredsTarget implements Target {
         }
       }
 
+      const entryEvidence = [...(incomingEvidence.get(nodeId) ?? [])]
+        .sort((left, right) => left.selector.localeCompare(right.selector) || sha256(left).localeCompare(sha256(right)))[0];
       nodes.push({
         id: nodeId,
         feature: featureFromUrl(currentUrl),
@@ -328,6 +394,23 @@ export class UrlCredsTarget implements Target {
           urlFingerprint: sha256({ url: nodeId }),
           buildFingerprint: sha256({ navItemSelector: this.config.navItemSelector }),
           stateFingerprint: sha256({ title, selectors }),
+          ...(entryEvidence === undefined
+            ? {}
+            : {
+                semanticTarget: entryEvidence.semanticTarget,
+                postcondition: {
+                  selector: entryEvidence.selector,
+                  evidence: `${title || entryEvidence.semanticTarget.accessibleName || "Destination"} is visible at ${nodeId}`,
+                },
+                ...(entryEvidence.layoutOccupancy === undefined
+                  ? {}
+                  : { layoutOccupancy: entryEvidence.layoutOccupancy }),
+                ...(entryEvidence.safeCaptionRegions === undefined
+                  ? {}
+                  : { safeCaptionRegions: entryEvidence.safeCaptionRegions }),
+                confidence: entryEvidence.confidence,
+                evidenceRefs: entryEvidence.evidenceRefs,
+              }),
         },
       });
     }

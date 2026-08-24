@@ -464,6 +464,35 @@ describe("runCli", () => {
     await expect(stat(pathsB.flowGraphPath)).resolves.toBeDefined();
   });
 
+  it.each(["youtube", "shorts", "square"] as const)("render --profile %s propagates the selected composition profile", async (profileName) => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-profile-"));
+    const cwd = scratchDir;
+    const { container, profile } = makeContainer();
+    const sink = makeSink();
+    await runCli(["discover"], container, cwd, sink.print, sink.printErr);
+    await runCli(["plan", "--brief", "Show how to invite a teammate"], container, cwd, sink.print, sink.printErr);
+
+    const code = await runCli(["render", "--approve", "--profile", profileName], container, cwd, sink.print, sink.printErr);
+
+    expect(code).toBe(0);
+    expect(profile.lastParams?.renderProfile).toBe(profileName);
+  });
+
+  it("rejects an invalid render profile before any render adapter runs", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-run-render-profile-invalid-"));
+    const cwd = scratchDir;
+    const { container, engine, voice, profile } = makeContainer();
+    const sink = makeSink();
+
+    const code = await runCli(["render", "--approve", "--profile", "portrait"], container, cwd, sink.print, sink.printErr);
+
+    expect(code).toBe(1);
+    expect(sink.errLines.join("\n")).toMatch(/Invalid --profile value "portrait".*youtube, shorts, square/);
+    expect(engine.captureCalls).toBe(0);
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(profile.composeCalls).toBe(0);
+  });
+
   describe("missing target env vars", () => {
     const savedEnv = {
       url: process.env.GUIDEO_TARGET_URL,

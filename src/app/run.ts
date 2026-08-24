@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { parseBrief } from "../domain/models/brief.js";
+import { parseRenderProfileName } from "../domain/models/media.js";
 import { type NarrationMode, parseNarrationMode } from "../domain/models/narration-mode.js";
 import { runDiscover } from "./commands/discover.js";
 import { runPlan } from "./commands/plan.js";
@@ -15,7 +16,7 @@ Usage:
   guideo discover [--project <name>]              Discover the target app, write its flow graph
   guideo plan --brief "<idea>" [--platform youtube] [--project <name>]
                                                    Plan a script + storyboard, then STOP for review
-  guideo render --approve [--project <name>] [--narration <voice|subtitles|both|silent>]
+  guideo render --approve [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>]
                                                    Render the last-planned, approved storyboard
   guideo --help                                   Show this help
 
@@ -83,6 +84,7 @@ function parseRenderArgs(args: readonly string[]): {
   approve: boolean;
   project: string;
   narration: NarrationMode;
+  renderProfile: import("../domain/models/media.js").RenderProfileName;
 } {
   const { values } = parseArgs({
     args: [...args],
@@ -90,6 +92,7 @@ function parseRenderArgs(args: readonly string[]): {
       approve: { type: "boolean" },
       project: { type: "string" },
       narration: { type: "string" },
+      profile: { type: "string" },
     },
     strict: true,
     allowPositionals: false,
@@ -98,6 +101,7 @@ function parseRenderArgs(args: readonly string[]): {
     approve: values.approve ?? false,
     project: resolveProject(values.project),
     narration: parseNarrationMode(values.narration ?? "both"),
+    renderProfile: parseRenderProfileName(values.profile ?? "youtube"),
   };
 }
 
@@ -137,9 +141,9 @@ export async function runCli(
         return 0;
       }
       case "render": {
-        const { approve, project, narration } = parseRenderArgs(rest);
+        const { approve, project, narration, renderProfile } = parseRenderArgs(rest);
         const paths = projectPaths({ project, cwd });
-        const video = await runRender(container, approve, paths, narration);
+        const video = await runRender(container, approve, paths, narration, renderProfile);
         print(`Final video written to ${video.path}`);
         return 0;
       }

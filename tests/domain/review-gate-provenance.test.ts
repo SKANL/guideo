@@ -14,4 +14,9 @@ describe("review-gate provenance", () => {
     const manifest = { ...approvalManifest({ flowGraph: "flow", script: "script", storyboard: "actual", policy: "policy" }), sha256: "tampered" };
     expect(() => reviewWithManifest(storyboard, manifest, { flowGraph: "flow", script: "script", storyboard: "actual", policy: "policy" })).toThrow("hash mismatch");
   });
+  it("persists the approval manifest provenance on the approved storyboard", () => {
+    const manifest = approvalManifest({ flowGraph: "flow", script: "script", storyboard: "actual", policy: "policy" });
+    const approved = reviewWithManifest(storyboard, manifest, { flowGraph: "flow", script: "script", storyboard: "actual", policy: "policy" });
+    expect(approved?.approvalProvenance).toEqual({ schema: "approval", version: 2, manifestSha256: manifest.sha256 });
+  });
 });

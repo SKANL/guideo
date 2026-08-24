@@ -115,4 +115,16 @@ describe("StoryboardSchema", () => {
     const result = StoryboardSchema.safeParse(invalid);
     expect(result.success).toBe(false);
   });
+
+  it("parses deterministic director overrides and storyboard provenance", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "#save", narrationSegmentId: "seg-1", director: {
+        shotIntent: "focus", focus: { enabled: true, target: "#save" }, captionPlacement: "top",
+        functionalPause: { kind: "confirmation", intentional: true, durationMs: 400 },
+      } }],
+      provenance: { schema: "storyboard", version: 1, source: "review", reviewedAt: "2026-08-24T12:00:00.000Z", reviewer: "director" },
+    });
+    expect(storyboard.steps[0]?.director?.captionPlacement).toBe("top");
+    expect(storyboard.provenance?.source).toBe("review");
+  });
 });

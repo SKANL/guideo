@@ -127,7 +127,6 @@ function normalizeParsedFlowGraph(graph: FlowGraph): FlowGraph {
 function compareStableStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
-
 // ponytail: minimal in-memory query stub proving the schema is query-ready; full route-subset
 // query logic (flow-graph-query.ts) lands in Phase 3 (T3.1).
 export function queryNodesByFeature(graph: FlowGraph, feature: string): FlowGraphNode[] {

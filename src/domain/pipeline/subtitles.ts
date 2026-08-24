@@ -88,16 +88,17 @@ function timedCues(text: string, speech: TimedSpeech | undefined): readonly { re
   }
   return readable;
 }
-export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], hints: CaptionLayoutHints | CaptionLayoutHintsBySegment = {}, speechTracks: readonly TimedSpeech[] = []): PlannedSubtitle[] {
+export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], hints: CaptionLayoutHints | CaptionLayoutHintsBySegment = {}, speechTracks: readonly TimedSpeech[] = [], placementOverrides: ReadonlyMap<string, CaptionPlacement> = new Map()): PlannedSubtitle[] {
   const rangeBySegmentId = new Map(scenes.map((scene) => [scene.narrationSegmentId, scene]));
   const speechBySegmentId = new Map(speechTracks.map((speech) => [speech.segmentId, speech]));
   const subtitles: PlannedSubtitle[] = [];
   for (const segment of script.segments) {
     const range = rangeBySegmentId.get(segment.id); if (!range) continue;
     const segmentHints = hints instanceof Map ? hints.get(segment.id) ?? {} : hints;
+    const placement = placementOverrides.get(segment.id);
     const timed = timedCues(segment.text, speechBySegmentId.get(segment.id));
     if (timed) {
-      subtitles.push(...timed.map((cue) => caption(cue.text, cue.startMs, cue.endMs - cue.startMs, placementFor(segmentHints))));
+      subtitles.push(...timed.map((cue) => caption(cue.text, cue.startMs, cue.endMs - cue.startMs, placement ?? placementFor(segmentHints))));
       continue;
     }
     const cues = captionCues(segment.text); let startMs = range.startMs;
@@ -106,7 +107,7 @@ export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], h
     for (const [index, text] of cues.entries()) {
       const weight = text.replace("\n", " ").length;
       const durationMs = index === cues.length - 1 ? remainingDurationMs : Math.round((remainingDurationMs * weight) / remainingWeight);
-      subtitles.push(caption(text, startMs, durationMs, placementFor(segmentHints)));
+      subtitles.push(caption(text, startMs, durationMs, placement ?? placementFor(segmentHints)));
       startMs += durationMs; remainingDurationMs -= durationMs; remainingWeight -= weight;
     }
   }

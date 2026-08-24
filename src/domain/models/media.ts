@@ -113,6 +113,15 @@ export interface Subtitle {
 
 /** Delivery composition remains explicit while a raw browser capture stays 16:9. */
 export type RenderProfileName = "youtube" | "shorts" | "square";
+const RENDER_PROFILE_NAMES: readonly RenderProfileName[] = ["youtube", "shorts", "square"];
+
+export function parseRenderProfileName(value: string): RenderProfileName {
+  if (!(RENDER_PROFILE_NAMES as readonly string[]).includes(value)) {
+    throw new Error(`Invalid --profile value "${value}" (expected one of: ${RENDER_PROFILE_NAMES.join(", ")}).`);
+  }
+  return value as RenderProfileName;
+}
+
 export type DeliveryAspectRatio = "16:9" | "9:16" | "1:1";
 
 export interface FinalVideo {

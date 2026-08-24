@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ElevenLabsVoice } from "../../../src/adapters/voice/elevenlabs-voice.js";
-import { runRender } from "../../../src/app/commands/render.js";
+import { promoteRenderOutputs, runRender } from "../../../src/app/commands/render.js";
 import { projectPaths } from "../../../src/app/paths.js";
 import { approvalManifest } from "../../../src/domain/artifacts/manifest.js";
 import { sha256 } from "../../../src/domain/artifacts/canonical.js";
@@ -251,6 +251,32 @@ describe("runRender", () => {
     expect(profile.lastParams?.outputPath).toMatch(/\.mp4$/);
   });
 
+  it("passes an explicit render profile through the runtime pipeline to PlatformProfile.compose", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-profile-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const profile = new FakePlatformProfile();
+
+    await runRender(
+      {
+        recordingEngine: new FakeRecordingEngine(),
+        preRollTrimmer: new FakePreRollTrimmer(),
+        privacyCutter: new FakePrivacyCutter(),
+        effectsEngine: new FakeEffectsEngine(),
+        sceneSplitter: new FakeSceneSplitter(),
+        sceneAssembler: new FakeSceneAssembler(),
+        voiceGen: new FakeVoiceGen(),
+        platformProfile: profile,
+      },
+      true,
+      paths,
+      "silent",
+      "square",
+    );
+
+    expect(profile.lastParams?.renderProfile).toBe("square");
+  });
+
   it("finalizes the MP4 provenance before atomically exposing its required SRT sidecar", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
@@ -266,15 +292,48 @@ describe("runRender", () => {
     expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
   });
 
-  it("removes the promoted MP4 when captions promotion fails, preventing partial delivery", async () => {
+  it("preserves the last known-good output and captions when rendering fails before promotion", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     await writeApprovedFixtures(paths);
-    await mkdir(paths.captionsPath, { recursive: true });
+    await mkdir(dirname(paths.outputPath), { recursive: true });
+    await mkdir(dirname(paths.captionsPath), { recursive: true });
+    await writeFile(paths.outputPath, "last-good-video", "utf8");
+    await writeFile(paths.captionsPath, "last-good-captions", "utf8");
+    const profile = new FakePlatformProfile();
+    profile.compose = async () => { throw new Error("compose failed"); };
 
-    await expect(runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile() }, true, paths, "silent")).rejects.toThrow();
+    await expect(runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: profile }, true, paths, "silent")).rejects.toThrow("compose failed");
 
-    await expect(stat(paths.outputPath)).rejects.toThrow();
+    expect(await readFile(paths.outputPath, "utf8")).toBe("last-good-video");
+    expect(await readFile(paths.captionsPath, "utf8")).toBe("last-good-captions");
+  });
+
+  it("restores both last known-good destinations when the second promotion fails", async () => {
+    const files = new Map([
+      ["temporary-video", "new-video"],
+      ["temporary-captions", "new-captions"],
+      ["output", "last-good-video"],
+      ["captions", "last-good-captions"],
+    ]);
+    const fakeFiles = {
+      rename: async (source: string, destination: string): Promise<void> => {
+        if (source === "temporary-captions" && destination === "captions") throw new Error("captions promotion failed");
+        const contents = files.get(source);
+        if (contents === undefined) throw Object.assign(new Error("missing file"), { code: "ENOENT" });
+        files.delete(source);
+        files.set(destination, contents);
+      },
+      unlink: async (path: string): Promise<void> => { files.delete(path); },
+    };
+
+    await expect(promoteRenderOutputs(fakeFiles, "temporary-video", "temporary-captions", "output", "captions", "video-backup", "captions-backup")).rejects.toThrow("captions promotion failed");
+
+    expect(files).toEqual(new Map([
+      ["temporary-captions", "new-captions"],
+      ["output", "last-good-video"],
+      ["captions", "last-good-captions"],
+    ]));
   });
 
   it("requires an existing finalized approval manifest and never issues one", async () => {

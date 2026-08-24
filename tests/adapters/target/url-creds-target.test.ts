@@ -28,6 +28,8 @@ interface FakeLinkSpec {
   text?: string;
   testid?: string;
   id?: string;
+  ariaLabel?: string;
+  box?: { x: number; y: number; width: number; height: number };
 }
 
 interface FakePageSpec {
@@ -43,10 +45,14 @@ function fakeLink(spec: FakeLinkSpec): PatchrightElementHandle {
       if (name === "href") return spec.href || null;
       if (name === "data-testid") return spec.testid ?? null;
       if (name === "id") return spec.id ?? null;
+      if (name === "aria-label") return spec.ariaLabel ?? null;
       return null;
     },
     async textContent() {
       return spec.text ?? null;
+    },
+    async boundingBox() {
+      return spec.box ?? null;
     },
   };
 }
@@ -258,6 +264,74 @@ describe("UrlCredsTarget", () => {
       from: normalize(HOME_URL),
       to: normalize(`${BASE_URL}/settings`),
       action: expect.stringContaining("click"),
+    });
+
+    await rm(outputPath, { force: true });
+  });
+
+  it("derives semantic target, verified route postcondition, layout, caption safety, confidence, and evidence refs from browser DOM evidence", async () => {
+    const { launcher } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [{
+          href: "/invite",
+          text: "Invite teammate",
+          testid: "invite",
+          ariaLabel: "Invite a teammate",
+          box: { x: 80, y: 500, width: 1040, height: 140 },
+        }],
+      },
+      [normalize(`${BASE_URL}/invite`)]: { title: "Invite teammate", links: [] },
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-evidence-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, { outputPath, maxPages: 10 });
+
+    const graph = await target.discover();
+
+    expect(graph.nodes.find((node) => node.id === normalize(`${BASE_URL}/invite`))?.locatorEvidence).toMatchObject({
+      semanticTarget: {
+        role: "link",
+        accessibleName: "Invite a teammate",
+        label: "invite-teammate",
+        testId: "invite",
+      },
+      postcondition: {
+        selector: '[data-testid="invite"]',
+        evidence: "Invite teammate is visible at https://target.example.com/invite",
+      },
+      layoutOccupancy: [{ x: 80, y: 500, w: 1040, h: 140 }],
+      safeCaptionRegions: ["top"],
+      confidence: "high",
+      evidenceRefs: [
+        "accessibility:Invite a teammate",
+        "browser:https://target.example.com/invite",
+        'dom:[data-testid="invite"]',
+      ],
+    });
+
+    await rm(outputPath, { force: true });
+  });
+
+  it("keeps the lower-third safe when the browser DOM target does not occupy it", async () => {
+    const { launcher } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [{ href: "/settings", text: "Settings", testid: "settings", box: { x: 20, y: 20, width: 120, height: 40 } }],
+      },
+      [normalize(`${BASE_URL}/settings`)]: { title: "Settings", links: [] },
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-safe-caption-${Date.now()}.json`);
+
+    const graph = await new UrlCredsTarget(launcher, { outputPath, maxPages: 10 }).discover();
+
+    expect(graph.nodes.find((node) => node.id === normalize(`${BASE_URL}/settings`))?.locatorEvidence).toMatchObject({
+      safeCaptionRegions: ["lower-third"],
+      confidence: "high",
+      evidenceRefs: [
+        "accessibility:Settings",
+        "browser:https://target.example.com/settings",
+        'dom:[data-testid="settings"]',
+      ],
     });
 
     await rm(outputPath, { force: true });

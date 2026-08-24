@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { sha256 } from "../../domain/artifacts/canonical.js";
 import { type ArtifactManifest } from "../../domain/artifacts/manifest.js";
-import type { FinalVideo } from "../../domain/models/media.js";
+import type { FinalVideo, RenderProfileName } from "../../domain/models/media.js";
 import type { NarrationMode } from "../../domain/models/narration-mode.js";
 import { parseScript } from "../../domain/models/script.js";
 import { parseStoryboard } from "../../domain/models/storyboard.js";
@@ -25,11 +25,64 @@ import type { MediaProbe } from "../../domain/ports/media-probe.js";
 import { toSrt } from "../../adapters/compose/srt.js";
 import { type GuideoPaths, projectPaths } from "../paths.js";
 
+type FileOperations = {
+  readonly rename: (oldPath: string, newPath: string) => Promise<void>;
+  readonly unlink: (path: string) => Promise<void>;
+};
+
+async function moveExistingDestination(
+  files: FileOperations,
+  destination: string,
+  backup: string,
+): Promise<boolean> {
+  try {
+    await files.rename(destination, backup);
+    return true;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export async function promoteRenderOutputs(
+  files: FileOperations,
+  temporaryVideoPath: string,
+  temporaryCaptionsPath: string,
+  outputPath: string,
+  captionsPath: string,
+  videoBackupPath: string,
+  captionsBackupPath: string,
+): Promise<void> {
+  let videoBackedUp = false;
+  let captionsBackedUp = false;
+  let videoPromoted = false;
+  let captionsPromoted = false;
+  try {
+    videoBackedUp = await moveExistingDestination(files, outputPath, videoBackupPath);
+    captionsBackedUp = await moveExistingDestination(files, captionsPath, captionsBackupPath);
+    await files.rename(temporaryVideoPath, outputPath);
+    videoPromoted = true;
+    await files.rename(temporaryCaptionsPath, captionsPath);
+    captionsPromoted = true;
+  } catch (error) {
+    if (videoPromoted) await files.unlink(outputPath).catch(() => undefined);
+    if (captionsPromoted) await files.unlink(captionsPath).catch(() => undefined);
+    if (videoBackedUp) await files.rename(videoBackupPath, outputPath).catch(() => undefined);
+    if (captionsBackedUp) await files.rename(captionsBackupPath, captionsPath).catch(() => undefined);
+    throw error;
+  }
+  await Promise.all([
+    videoBackedUp ? files.unlink(videoBackupPath).catch(() => undefined) : undefined,
+    captionsBackedUp ? files.unlink(captionsBackupPath).catch(() => undefined) : undefined,
+  ]);
+}
+
 export async function runRender(
   container: { readonly recordingEngine: RecordingEngine; readonly preRollTrimmer: PreRollTrimmer; readonly privacyCutter: PrivacyCutter; readonly effectsEngine: EffectsEngine; readonly sceneSplitter: SceneSplitter; readonly sceneAssembler: SceneAssembler; readonly voiceGen: VoiceGen; readonly platformProfile: PlatformProfile; readonly mediaProbe?: MediaProbe; readonly usageLedger?: UsageLedger; readonly artifactStore?: ArtifactStore },
   approve: boolean,
   paths: GuideoPaths = projectPaths({ project: "default" }),
   narration: NarrationMode = "both",
+  renderProfile: RenderProfileName = "youtube",
 ): Promise<FinalVideo> {
   if (!approve) throw new Error("guideo render refused: no --approve flag given. Review `guideo plan` output before rendering.");
   const script = parseScript(JSON.parse(await readFile(paths.scriptPath, "utf8")));
@@ -52,11 +105,13 @@ export async function runRender(
   const token = randomUUID();
   const temporaryVideoPath = join(dirname(paths.outputPath), `.${token}.mp4`);
   const temporaryCaptionsPath = join(dirname(paths.captionsPath), `.${token}.srt`);
+  const videoBackupPath = join(dirname(paths.outputPath), `.${token}.mp4.backup`);
+  const captionsBackupPath = join(dirname(paths.captionsPath), `.${token}.srt.backup`);
   let externalWorkCompleted = false;
   try {
     await mkdir(dirname(paths.outputPath), { recursive: true });
     await mkdir(dirname(paths.captionsPath), { recursive: true });
-    const rendered = await renderWithContext(container, approved, script, temporaryVideoPath, { narration });
+    const rendered = await renderWithContext(container, approved, script, temporaryVideoPath, { narration, renderProfile });
     const video = rendered.video;
     externalWorkCompleted = true;
     const speech = rendered.context.audioTracks.flatMap((audio) => audio.speech ? [{ segmentId: audio.segmentId, ...audio.speech, ...(audio.provenance ? { provenance: audio.provenance } : {}) }] : []);
@@ -72,13 +127,21 @@ export async function runRender(
       provenance = ref;
     }
     if (reservation) await container.usageLedger!.commit(reservation.id, { unit: "usd-micros", amount: 0, cache: "miss", provider: "guideo-render" });
-    await rename(video.path, paths.outputPath);
-    await rename(temporaryCaptionsPath, paths.captionsPath);
+    await promoteRenderOutputs(
+      { rename, unlink },
+      video.path,
+      temporaryCaptionsPath,
+      paths.outputPath,
+      paths.captionsPath,
+      videoBackupPath,
+      captionsBackupPath,
+    );
     return { ...video, path: paths.outputPath, ...(provenance ? { provenance } : {}) };
   } catch (error) {
-    // Two filesystem renames cannot be one OS-atomic operation. If either promotion fails, remove
-    // both destination members so callers never observe a new MP4 without its required captions.
-    await Promise.all([unlink(temporaryVideoPath).catch(() => undefined), unlink(temporaryCaptionsPath).catch(() => undefined), unlink(paths.outputPath).catch(() => undefined), unlink(paths.captionsPath).catch(() => undefined)]);
+    await Promise.all([
+      unlink(temporaryVideoPath).catch(() => undefined),
+      unlink(temporaryCaptionsPath).catch(() => undefined),
+    ]);
     if (reservation && !externalWorkCompleted) await container.usageLedger!.release(reservation.id, "render failed");
     if (externalWorkCompleted) await container.artifactStore?.quarantine(token, error instanceof Error ? error.message : String(error));
     throw error;
