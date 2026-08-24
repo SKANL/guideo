@@ -224,20 +224,24 @@ class EffectsStage implements PipelineStage {
       renderProfile: this.renderProfile,
       intent: ctx.narration,
     }));
-    const cached = keys.map((key) => this.cache?.get(key) ?? null);
+    const cached = await Promise.all(keys.map((key) => this.cache?.getOrLoad(key) ?? null));
     const dirty = ctx.sceneClips.filter((_, index) => cached[index] === null);
     const processed = dirty.length === 0
       ? []
       : await this.effects.applyToScenes(clip, dirty, ctx.approved);
     let processedIndex = 0;
-    const sceneClips = ctx.sceneClips.map((scene, index) => {
+    const sceneClips: SceneClip[] = [];
+    for (let index = 0; index < ctx.sceneClips.length; index += 1) {
       const hit = cached[index];
-      if (hit) return hit.clip;
+      if (hit) {
+        sceneClips.push(hit.clip);
+        continue;
+      }
       const clip = processed[processedIndex++];
       if (!clip) throw new Error("effects engine returned fewer scene artifacts than requested");
-      this.cache?.put(keys[index]!, { ref: keys[index]!, clip });
-      return clip;
-    });
+      await this.cache?.putPersistent(keys[index]!, { ref: keys[index]!, clip });
+      sceneClips.push(clip);
+    }
     return { ...ctx, sceneClips };
   }
 }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -46,6 +46,20 @@ describe("FsArtifactStore", () => {
       await writeFile(join(root, "blobs", first.sha256), "corrupted", "utf8");
       expect(await store.lookup(first)).toBeNull();
       expect(await store.lookup(second)).toEqual(second);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("ignores and quarantines a corrupt materialization", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guideo-store-"));
+    try {
+      const store = new FsArtifactStore(root);
+      const key = { schema: "guideo.scene-artifact", version: 1, sha256: "scene-key" };
+      await store.saveMaterialization(key, new TextEncoder().encode('{"clip":"valid"}'));
+      await writeFile(join(root, "materializations", `${key.sha256}.json`), "{ corrupt", "utf8");
+
+      expect(await store.loadMaterialization(key)).toBeNull();
+      const entries = await readdir(join(root, "quarantine"));
+      expect(entries.some((entry) => entry.startsWith("materialization-"))).toBe(true);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

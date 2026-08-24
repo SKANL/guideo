@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FsArtifactStore } from "../../../src/adapters/storage/fs-artifact-store.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import { parseStoryboard, type ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
@@ -56,5 +60,30 @@ describe("incremental scene artifact cache", () => {
     await render(ports(cache, effects, assembler, [{ narrationSegmentId: "s1", path: "s1-v2.mp4", durationMs: 1_000 }, { narrationSegmentId: "s2", path: "s2-v1.mp4", durationMs: 1_000 }]), approved, script, "two.mp4", { narration: "silent" });
     expect(effects.batches).toEqual([["s1-v1.mp4", "s2-v1.mp4"], ["s1-v2.mp4"]]);
     expect(assembler.assembled.at(-1)).toEqual([{ narrationSegmentId: "s1", path: "edited-s1-v2.mp4", durationMs: 1_000 }, { narrationSegmentId: "s2", path: "edited-s2-v1.mp4", durationMs: 1_000 }]);
+  });
+
+  it("rehydrates persisted artifacts across independent cache instances without repeating effects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guideo-scene-cache-"));
+    try {
+      const scenes = [{ narrationSegmentId: "s1", path: "s1-v1.mp4", durationMs: 1_000 }];
+      const effects = new Effects();
+      await render(ports(new SceneArtifactCache(new FsArtifactStore(root)), effects, new Assemble(), scenes), approved, script, "one.mp4", { narration: "silent" });
+      const assembler = new Assemble();
+      await render(ports(new SceneArtifactCache(new FsArtifactStore(root)), effects, assembler, scenes), approved, script, "two.mp4", { narration: "silent" });
+
+      expect(effects.batches).toEqual([["s1-v1.mp4"]]);
+      expect(assembler.assembled.at(-1)).toEqual([{ narrationSegmentId: "s1", path: "edited-s1-v1.mp4", durationMs: 1_000 }]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("invalidates a persisted scene artifact when the input scene changes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guideo-scene-cache-"));
+    try {
+      const effects = new Effects();
+      await render(ports(new SceneArtifactCache(new FsArtifactStore(root)), effects, new Assemble(), [{ narrationSegmentId: "s1", path: "s1-v1.mp4", durationMs: 1_000 }]), approved, script, "one.mp4", { narration: "silent" });
+      await render(ports(new SceneArtifactCache(new FsArtifactStore(root)), effects, new Assemble(), [{ narrationSegmentId: "s1", path: "s1-v2.mp4", durationMs: 1_000 }]), approved, script, "two.mp4", { narration: "silent" });
+
+      expect(effects.batches).toEqual([["s1-v1.mp4"], ["s1-v2.mp4"]]);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
