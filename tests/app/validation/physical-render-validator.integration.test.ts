@@ -85,6 +85,15 @@ describe("physical render fixture matrix", () => {
       });
       expect(report.status).toBe("passed");
       expect(report.failures).toEqual([]);
+      expect(report.checkpoints).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            atMs: 0,
+            bytes: expect.any(Number),
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          }),
+        ]),
+      );
     }, 30_000);
   }
 });

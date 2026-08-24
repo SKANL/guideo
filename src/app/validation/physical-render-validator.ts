@@ -1,15 +1,13 @@
+import { createHash } from "node:crypto";
 import type { RenderProfileName } from "../../domain/models/media.js";
 import type { NarrationMode } from "../../domain/models/narration-mode.js";
+import type {
+  FrameCheckpoint,
+  FrameCheckpointProbe,
+} from "../../domain/ports/frame-checkpoint-probe.js";
 import type { MediaProbe, MediaProbeResult } from "../../domain/ports/media-probe.js";
 import { physicalRenderValidationScenario } from "./physical-render-matrix.js";
 
-export interface FrameCheckpoint {
-  readonly atMs: number;
-  readonly bytes: number;
-}
-export interface FrameCheckpointProbe {
-  capture(videoPath: string, checkpointsMs: readonly number[]): Promise<readonly FrameCheckpoint[]>;
-}
 export interface PhysicalRenderValidationRequest {
   readonly videoPath: string;
   readonly srtPath: string;
@@ -43,7 +41,7 @@ export interface PhysicalRenderValidationResult {
   readonly status: "passed" | "failed";
   readonly failures: readonly string[];
   readonly metadata: MediaProbeResult;
-  readonly checkpoints: readonly unknown[];
+  readonly checkpoints: readonly FrameCheckpoint[];
 }
 const SRT_CUE = /^\d+\r?\n\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}\r?\n.+/m;
 
@@ -60,10 +58,13 @@ export async function validatePhysicalRender(
       ? input.frameProbe.capture(request.videoPath, request.checkpointsMs)
       : input.frameProbe.extract(request.videoPath, request.checkpointsMs),
   ]);
-  const frames = rawFrames.map((frame) => ({
-    atMs: frame.atMs,
-    bytes: typeof frame.bytes === "number" ? frame.bytes : frame.bytes.byteLength,
-  }));
+  const frames: readonly FrameCheckpoint[] = nested
+    ? (rawFrames as readonly FrameCheckpoint[])
+    : (rawFrames as readonly { atMs: number; bytes: Uint8Array }[]).map((frame) => ({
+        atMs: frame.atMs,
+        bytes: frame.bytes.byteLength,
+        sha256: createHash("sha256").update(frame.bytes).digest("hex"),
+      }));
   const failures: string[] = [];
   const scenario = physicalRenderValidationScenario(request.profile, request.narration);
   if (!metadata.hasVideo) failures.push("MP4 has no video stream");
@@ -111,6 +112,6 @@ export async function validatePhysicalRender(
     status: failures.length === 0 ? "passed" : "failed",
     failures,
     metadata,
-    checkpoints: nested ? [...request.checkpointsMs] : rawFrames,
+    checkpoints: frames,
   };
 }

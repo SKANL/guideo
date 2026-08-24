@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ElevenLabsVoice } from "../../../src/adapters/voice/elevenlabs-voice.js";
 import { promoteRenderOutputs, runRender } from "../../../src/app/commands/render.js";
-import { projectPaths } from "../../../src/app/paths.js";
+import { projectPaths, renderArtifactPaths } from "../../../src/app/paths.js";
 import { approvalManifest } from "../../../src/domain/artifacts/manifest.js";
 import { sha256 } from "../../../src/domain/artifacts/canonical.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
@@ -284,12 +284,13 @@ describe("runRender", () => {
     const store = new TrackingArtifactStore();
 
     const video = await runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile(), artifactStore: store }, true, paths, "silent");
+    const outputPaths = renderArtifactPaths(paths, "youtube", "silent");
 
     expect(store.finalized).toHaveLength(1);
     expect(store.finalized[0]).toMatchObject({ schema: "guideo.final-video", finalized: true });
     expect(video.provenance?.sha256).toBe("finalized");
-    expect(await readFile(paths.outputPath, "utf8")).toBe("video");
-    expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
+    expect(await readFile(outputPaths.outputPath, "utf8")).toBe("video");
+    expect(await readFile(outputPaths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
   });
 
   it("preserves the last known-good output and captions when rendering fails before promotion", async () => {
@@ -398,9 +399,10 @@ describe("runRender", () => {
     const ledger = new TrackingLedger();
 
     await runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: voice, platformProfile: new FakePlatformProfile(), mediaProbe: new FakeMediaProbe({ durationMs: 1500, hasVideo: true, hasAudio: false }), usageLedger: ledger }, true, paths, "silent");
+    const outputPaths = renderArtifactPaths(paths, "youtube", "silent");
 
     expect(voice.synthesizeCalls).toBe(0);
-    expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
+    expect(await readFile(outputPaths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
     expect(ledger.voiceReservations).toBe(0);
   });
 
@@ -410,8 +412,9 @@ describe("runRender", () => {
     await writeApprovedFixtures(paths);
 
     await runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile() }, true, paths, "voice");
+    const outputPaths = renderArtifactPaths(paths, "youtube", "voice");
 
-    expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
+    expect(await readFile(outputPaths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
   });
 
   describe("missing ELEVENLABS_API_KEY", () => {

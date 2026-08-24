@@ -1,0 +1,17 @@
+{
+  "schema": "guideo.real-ux-evidence",
+  "version": 1,
+  "kind": "real",
+  "example": true,
+  "purpose": "EMPTY EXAMPLE ONLY. This file contains no real-user evidence and must not be passed to guideo validate.",
+  "source": {
+    "system": "replace-with-consented-source",
+    "method": "session-rating",
+    "collectedAt": "2026-01-01T00:00:00.000Z"
+  },
+  "consent": {
+    "obtained": false,
+    "policyVersion": "replace-with-approved-policy-version"
+  },
+  "sessions": []
+}

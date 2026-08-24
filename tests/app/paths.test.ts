@@ -18,6 +18,9 @@ describe("projectPaths", () => {
       approvalManifestPath: join(guideoDir, "approval-manifest.json"),
       captionsPath: join(guideoDir, "captions.srt"),
       outputPath: join(guideoDir, "output", "youtube.mp4"),
+      validationReportPath: join(guideoDir, "validation-report.json"),
+      checkpointReportPath: join(guideoDir, "output", "youtube-both.checkpoint-report.json"),
+      physicalRenderMatrixReportPath: join(guideoDir, "physical-render-matrix-report.json"),
     });
   });
 
@@ -26,6 +29,27 @@ describe("projectPaths", () => {
 
     expect(paths.outputPath).toBe(
       join("/work", ".guideo", "projects", "acme", "output", "tiktok.mp4"),
+    );
+  });
+
+  it("isolates profile and narration variants without changing the legacy youtube/both paths", () => {
+    const legacy = projectPaths({
+      project: "acme",
+      cwd: "/work",
+      renderProfile: "youtube",
+      narration: "both",
+    });
+    const shorts = projectPaths({
+      project: "acme",
+      cwd: "/work",
+      renderProfile: "shorts",
+      narration: "silent",
+    });
+    expect(legacy.outputPath).toBe(join(legacy.guideoDir, "output", "youtube.mp4"));
+    expect(shorts.outputPath).toBe(join(shorts.guideoDir, "output", "shorts-silent.mp4"));
+    expect(shorts.captionsPath).toBe(join(shorts.guideoDir, "output", "shorts-silent.srt"));
+    expect(shorts.validationReportPath).toBe(
+      join(shorts.guideoDir, "output", "shorts-silent.validation-report.json"),
     );
   });
 

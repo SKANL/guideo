@@ -15,6 +15,7 @@ describe("promotion gate", () => {
     expect(evaluatePromotion(input)).toEqual({
       status: "promoted", criticalFailures: [], quality: { status: "passed", failures: [] },
       ux: { status: "passed", score: 0.88, failures: [] },
+      uxEvidenceSource: "synthetic-baseline",
       usage: { spent: 12, reserved: 0, unit: "usd-micros", cacheHits: 2, cacheSavings: 9 },
     });
   });
@@ -33,6 +34,7 @@ describe("promotion gate", () => {
       ],
       quality: { status: "failed", failures: ["storyboard covers 1 segments; expected 2", "output is missing required captions sidecar", "caption coverage 80% is incomplete", "captions are not legible"] },
       ux: { status: "failed", score: 0.79, failures: ["target comprehension 75% is below 80%", "UX aggregate 79% is below 80%"] },
+      uxEvidenceSource: "synthetic-baseline",
       usage: { spent: 12, reserved: 1, unit: "usd-micros", cacheHits: 0, cacheSavings: 0 },
     });
   });

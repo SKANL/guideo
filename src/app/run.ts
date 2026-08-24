@@ -6,7 +6,12 @@ import { type NarrationMode, parseNarrationMode } from "../domain/models/narrati
 import { runDiscover } from "./commands/discover.js";
 import { runPlan } from "./commands/plan.js";
 import { runRender } from "./commands/render.js";
-import { parseValidateNarration, parseValidateRenderProfile, runValidate } from "./commands/validate.js";
+import { runValidateMatrix } from "./commands/validate-matrix.js";
+import {
+  parseValidateNarration,
+  parseValidateRenderProfile,
+  runValidate,
+} from "./commands/validate.js";
 import type { Container } from "./factory.js";
 import { projectPaths } from "./paths.js";
 import { defaultProjectName } from "./project-name.js";
@@ -21,7 +26,8 @@ Usage:
   guideo render --approve [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>]
                                                    Render the last-planned, approved storyboard
   guideo validate [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>] [--ux-evidence <path>]
-                                                   Validate the rendered MP4/SRT and write validation-report.json
+                                                   Validate one rendered MP4/SRT and write its reports
+  guideo validate-matrix [--project <name>]       Validate all rendered profile/narration variants and write a matrix artifact
   guideo --help                                   Show this help
 
 Review gate: "plan" never captures the screen or synthesizes voice. Review the printed script +
@@ -110,14 +116,29 @@ function parseRenderArgs(args: readonly string[]): {
   };
 }
 
-function parseValidateArgs(args: readonly string[]): { project: string; narration: NarrationMode; renderProfile: import("../domain/models/media.js").RenderProfileName; uxEvidencePath?: string } {
+function parseValidateArgs(args: readonly string[]): {
+  project: string;
+  narration: NarrationMode;
+  renderProfile: import("../domain/models/media.js").RenderProfileName;
+  uxEvidencePath?: string;
+} {
   const { values } = parseArgs({
     args: [...args],
-    options: { project: { type: "string" }, narration: { type: "string" }, profile: { type: "string" }, "ux-evidence": { type: "string" } },
+    options: {
+      project: { type: "string" },
+      narration: { type: "string" },
+      profile: { type: "string" },
+      "ux-evidence": { type: "string" },
+    },
     strict: true,
     allowPositionals: false,
   });
-  return { project: resolveProject(values.project), narration: parseValidateNarration(values.narration), renderProfile: parseValidateRenderProfile(values.profile), ...(values["ux-evidence"] ? { uxEvidencePath: values["ux-evidence"] } : {}) };
+  return {
+    project: resolveProject(values.project),
+    narration: parseValidateNarration(values.narration),
+    renderProfile: parseValidateRenderProfile(values.profile),
+    ...(values["ux-evidence"] ? { uxEvidencePath: values["ux-evidence"] } : {}),
+  };
 }
 
 // The testable dispatcher: command parsing + calling into the commands/ layer. Every side effect
@@ -157,17 +178,46 @@ export async function runCli(
       }
       case "render": {
         const { approve, project, narration, renderProfile } = parseRenderArgs(rest);
-        const paths = projectPaths({ project, cwd });
+        const paths = projectPaths({ project, cwd, renderProfile, narration });
         const video = await runRender(container, approve, paths, narration, renderProfile);
         print(`Final video written to ${video.path}`);
         return 0;
       }
       case "validate": {
         const { project, narration, renderProfile, uxEvidencePath } = parseValidateArgs(rest);
-        if (!container.mediaProbe || !container.usageLedger) throw new Error("validate requires media probe and usage ledger adapters");
+        if (!container.mediaProbe || !container.usageLedger)
+          throw new Error("validate requires media probe and usage ledger adapters");
+        const paths = projectPaths({ project, cwd, renderProfile, narration });
+        const report = await runValidate(
+          {
+            mediaProbe: container.mediaProbe,
+            usageLedger: container.usageLedger,
+            ...(container.frameProbe ? { frameProbe: container.frameProbe } : {}),
+          },
+          {
+            paths,
+            narration,
+            profile: renderProfile,
+            ...(uxEvidencePath ? { uxEvidencePath } : {}),
+          },
+        );
+        print(`Validation report written to ${paths.validationReportPath}`);
+        return report.status === "passed" ? 0 : 1;
+      }
+      case "validate-matrix": {
+        const { project } = parseDiscoverArgs(rest);
+        if (!container.mediaProbe || !container.usageLedger)
+          throw new Error("validate-matrix requires media probe and usage ledger adapters");
         const paths = projectPaths({ project, cwd });
-        const report = await runValidate({ mediaProbe: container.mediaProbe, usageLedger: container.usageLedger, ...(container.frameProbe ? { frameProbe: container.frameProbe } : {}) }, { paths, narration, profile: renderProfile, ...(uxEvidencePath ? { uxEvidencePath } : {}) });
-        print(`Validation report written to ${join(paths.guideoDir, "validation-report.json")}`);
+        const report = await runValidateMatrix(
+          {
+            mediaProbe: container.mediaProbe,
+            usageLedger: container.usageLedger,
+            ...(container.frameProbe ? { frameProbe: container.frameProbe } : {}),
+          },
+          paths,
+        );
+        print(`Physical render matrix artifact written to ${paths.physicalRenderMatrixReportPath}`);
         return report.status === "passed" ? 0 : 1;
       }
       default: {
