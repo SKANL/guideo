@@ -63,14 +63,11 @@ export function applyDirectorDefaults(
         beat.target,
     );
     if (!actionBeat?.target) continue;
-    const setupBeat = plan.beats.find(
-      (beat) => beat.stepIndex === actionBeat.stepIndex && beat.kind === "setup",
-    );
-    const holdBeat = plan.beats.find(
-      (beat) => beat.stepIndex === actionBeat.stepIndex && beat.kind === "hold",
+    const reactionBeat = plan.beats.find(
+      (beat) => beat.stepIndex === actionBeat.stepIndex && beat.kind === "reaction",
     );
     const step = steps[actionBeat.stepIndex];
-    if (!step || !setupBeat || !holdBeat) continue;
+    if (!step || !reactionBeat) continue;
     const segmentStartMs = script.segments.find(
       (segment) => segment.id === actionBeat.narrationSegmentId,
     )?.timing.startMs;
@@ -82,8 +79,8 @@ export function applyDirectorDefaults(
         selector: actionBeat.target.selector,
         semanticTarget: actionBeat.target.evidence,
         level: cfg.zoomLevel,
-        entryMs: setupBeat.startMs - segmentStartMs,
-        exitMs: holdBeat.startMs + holdBeat.durationMs - segmentStartMs,
+        entryMs: actionBeat.startMs - segmentStartMs,
+        exitMs: reactionBeat.startMs + reactionBeat.durationMs - segmentStartMs,
       },
     });
   }

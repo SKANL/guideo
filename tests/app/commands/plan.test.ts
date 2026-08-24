@@ -206,8 +206,8 @@ describe("runPlan", () => {
         selector: "#invite-btn",
         semanticTarget: "Invite teammate",
         level: 1.12,
-        entryMs: 0,
-        exitMs: 1500,
+        entryMs: 225,
+        exitMs: 1275,
       },
     });
   });

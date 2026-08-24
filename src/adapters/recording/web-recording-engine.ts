@@ -325,6 +325,9 @@ export class WebRecordingEngine implements RecordingEngine {
 
       const stepIndex = startStepIndex + sceneStepIndex;
       const preparedStep = await this.prepareRequiredStep(page, step, stepIndex);
+      const preActionRegions = await Promise.all(
+        preparedStep.effects.map((effect) => this.resolveEffectRegion(page, effect)),
+      );
       const result = await this.runStep(page, preparedStep, mousePosition);
       this.verifyPostcondition(page, preparedStep, stepIndex);
       await onStepCompleted(preparedStep);
@@ -333,8 +336,11 @@ export class WebRecordingEngine implements RecordingEngine {
 
       // Resolved HERE (right after the step's own action settles) so any element the step just
       // navigated to / clicked / revealed is actually on screen for boundingBox() to find.
-      for (const effect of step.effects) {
-        const region = await this.resolveEffectRegion(page, effect);
+      for (const [effectIndex, effect] of step.effects.entries()) {
+        // Prefer the pre-action box: click targets frequently disappear or change state after
+        // the interaction (e.g. Add to cart becomes Remove), but the visual emphasis still needs
+        // the location the user acted on.
+        const region = preActionRegions[effectIndex] ?? null;
         resolvedEffects.push({
           narrationSegmentId: step.narrationSegmentId,
           type: effect.type,

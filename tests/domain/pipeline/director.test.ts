@@ -43,8 +43,8 @@ describe("applyDirectorDefaults", () => {
         selector: "#invite",
         semanticTarget: "Invite teammate",
         level: 1.12,
-        entryMs: 0,
-        exitMs: 1000,
+        entryMs: 150,
+        exitMs: 850,
       },
     });
   });
