@@ -97,3 +97,38 @@ describe("quality gate", () => {
     ]);
   });
 });
+
+  it("reports deterministic evidence for duration drift, frame defects, captions, target evidence, and motion overlap", () => {
+    const report = evaluateQuality(
+      { durationMs: 3_400, hasVideo: true, hasAudio: false, frozenFrameRatio: 0.2, blackFrameRatio: 0.1 },
+      {
+        expectedDurationMs: 3_000, maximumDurationDriftMs: 200, expectedSegments: 1, actualSegments: 1, narration: "subtitles",
+        captionEvidence: { coverage: 1, legible: true, occluded: false, overlapsUi: true, overflowsViewport: true },
+        targetEvidence: { required: true, postconditionVisible: false },
+        motionRanges: [{ id: "zoom", startMs: 0, endMs: 1_000 }, { id: "fade", startMs: 800, endMs: 1_200 }],
+        maximumFrozenFrameRatio: 0.05, maximumBlackFrameRatio: 0.01,
+      },
+    );
+
+    expect(report).toEqual({
+      status: "failed",
+      failures: [
+        "output duration drift 400ms exceeds 200ms",
+        "captions overlap the target UI",
+        "captions overflow the viewport",
+        "required target postcondition is not visible in evidence",
+        "frozen-frame ratio 20% exceeds 5%",
+        "black-frame ratio 10% exceeds 1%",
+        "motion ranges overlap: zoom ends at 1000ms after fade starts at 800ms",
+      ],
+      evidence: [
+        { code: "duration-drift", severity: "error", value: 400, limit: 200 },
+        { code: "caption-overlap", severity: "error" },
+        { code: "caption-overflow", severity: "error" },
+        { code: "target-postcondition-hidden", severity: "error" },
+        { code: "frozen-frame-ratio", severity: "error", value: 0.2, limit: 0.05 },
+        { code: "black-frame-ratio", severity: "error", value: 0.1, limit: 0.01 },
+        { code: "motion-overlap", severity: "error" },
+      ],
+    });
+  });

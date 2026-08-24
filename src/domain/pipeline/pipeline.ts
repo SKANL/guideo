@@ -288,6 +288,7 @@ class DeriveSubtitlesStage implements PipelineStage {
         ctx.script,
         clip.scenes,
         captionLayoutHintsFromResolvedEffects(clip.resolvedEffects),
+        ctx.audioTracks.flatMap((audio) => audio.speech ? [{ segmentId: audio.segmentId, ...audio.speech }] : []),
       ),
     };
   }

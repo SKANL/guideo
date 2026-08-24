@@ -22,6 +22,14 @@ const professionalH264Settings = [
 ];
 
 describe("buildComposeArgv — argv-array process boundary safety", () => {
+  it("reframes a vertical export with frame-preserving scale-and-pad rather than a target-losing crop", () => {
+    const argv = buildComposeArgv({ ...baseParams, renderProfile: "shorts" }, "subs.srt", "shorts.mp4");
+    const vf = argv[argv.indexOf("-vf") + 1] as string;
+
+    expect(vf).toContain("force_original_aspect_ratio=decrease");
+    expect(vf).toContain("pad=1080:1920");
+    expect(vf).not.toContain("crop=");
+  });
   it("uses the professional H.264 delivery settings for the default export", () => {
     const argv = buildComposeArgv(baseParams, "subs.srt", "final.mp4");
 

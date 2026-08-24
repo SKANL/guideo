@@ -2,7 +2,7 @@
 // argv array element (never shell-interpolated by the caller), so shell metacharacters in a
 // filename are always inert here.
 import type { ComposeParams } from "../../domain/ports/platform-profile.js";
-import { buildProfessionalH264Args } from "./render-profile.js";
+import { buildFramePreservingFilter, buildProfessionalH264Args, resolveRenderProfile } from "./render-profile.js";
 
 function sanitizePositionalPath(path: string): string {
   // A leading "-" is the only case ffmpeg's own argv parser could misread as a flag rather than
@@ -85,6 +85,8 @@ export function buildComposeArgv(
   outputPath: string,
 ): string[] {
   const narration = params.narration ?? "both";
+  const profile = resolveRenderProfile(params.renderProfile);
+  const frameFilter = buildFramePreservingFilter(profile);
 
   if (narration === "subtitles" || narration === "silent") {
     // No narration audio at all in this mode: silent output (-an, no audio input/map/codec), with
@@ -93,7 +95,7 @@ export function buildComposeArgv(
       "-y",
       "-i",
       sanitizePositionalPath(params.rawClip.path),
-      ...(narration === "subtitles" ? ["-vf", burnedSubtitleFilter(srtPath)] : []),
+      ...((narration === "subtitles" || frameFilter) ? ["-vf", [frameFilter, narration === "subtitles" ? burnedSubtitleFilter(srtPath) : undefined].filter((value): value is string => Boolean(value)).join(",")] : []),
       "-map",
       "0:v",
       ...buildProfessionalH264Args(),
@@ -125,6 +127,7 @@ export function buildComposeArgv(
     sanitizePositionalPath(params.rawClip.path),
     ...audioInputArgs,
     ...subtitleInputArgs,
+    ...(frameFilter ? ["-vf", frameFilter] : []),
     "-filter_complex",
     audioFilterComplex,
     "-map",

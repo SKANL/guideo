@@ -120,3 +120,13 @@ describe("FileUsageLedger concurrency", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
+
+  it("reports cache-hit savings without changing the existing spend contract", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guideo-ledger-"));
+    try {
+      const ledger = new FileUsageLedger(join(root, "usage.json"), { limit: 10 });
+      const reservation = await ledger.reserve({ operation: "scene-effects", estimated: 5 });
+      await ledger.commit(reservation.id, { unit: "usd-micros", amount: 0, cache: "hit", avoidedAmount: 5 });
+      expect(await ledger.snapshot()).toEqual({ spent: 0, reserved: 0, unit: "usd-micros", cacheHits: 1, cacheSavings: 5 });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });

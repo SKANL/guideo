@@ -31,6 +31,17 @@ export interface SemanticTargetEvidence {
   readonly label?: string;
   readonly testId?: string;
   readonly locatorCandidates: readonly string[];
+  readonly semanticTarget?: {
+    readonly role?: string;
+    readonly accessibleName?: string;
+    readonly label?: string;
+    readonly testId?: string;
+  };
+  readonly postcondition?: { readonly selector?: string; readonly evidence: string };
+  readonly layoutOccupancy?: readonly { readonly x: number; readonly y: number; readonly w: number; readonly h: number }[];
+  readonly safeCaptionRegions?: readonly ("lower-third" | "top" | "bottom-left" | "bottom-right")[];
+  readonly confidence?: "low" | "medium" | "high";
+  readonly evidenceRefs?: readonly string[];
 }
 
 export interface CapabilityPostcondition {
@@ -69,7 +80,11 @@ export function deriveCapabilityProfile(
       ?? node.locatorEvidence?.candidates
       ?? Object.values(node.selectors);
     semanticLocators[node.id] = [...new Set(candidates)].sort(compareStableStrings);
-    evidence[node.id] = semanticEvidence(node.selectors, semanticLocators[node.id]!);
+    evidence[node.id] = semanticEvidence(
+      node.selectors,
+      semanticLocators[node.id]!,
+      suppliedNodes.get(node.id)?.locatorEvidence ?? node.locatorEvidence,
+    );
     states[node.id] = node.locatorEvidence?.stateFingerprint ?? sha256({
       route: node.id,
       selectors: node.selectors,
@@ -154,6 +169,7 @@ export function isCapabilityProfile(value: unknown): value is CapabilityProfile 
 function semanticEvidence(
   selectors: Readonly<Record<string, string>>,
   locatorCandidates: readonly string[],
+  suppliedEvidence: FlowGraph["nodes"][number]["locatorEvidence"],
 ): SemanticTargetEvidence {
   const [label, selector = ""] = Object.entries(selectors)
     .filter(([, value]) => locatorCandidates.includes(value))
@@ -164,12 +180,41 @@ function semanticEvidence(
     : /^(button|\[role=["']?button)/.test(selector)
       ? "button"
       : undefined;
+  const semanticTarget = suppliedEvidence?.semanticTarget === undefined
+    ? {
+        ...(role === undefined ? {} : { role }),
+        ...(selector.startsWith("text=") ? { accessibleName: selector.slice("text=".length) } : {}),
+        ...(label === undefined ? {} : { label }),
+        ...(testId === undefined ? {} : { testId }),
+      }
+    : {
+        ...(suppliedEvidence.semanticTarget.role === undefined ? {} : { role: suppliedEvidence.semanticTarget.role }),
+        ...(suppliedEvidence.semanticTarget.accessibleName === undefined
+          ? {}
+          : { accessibleName: suppliedEvidence.semanticTarget.accessibleName }),
+        ...(suppliedEvidence.semanticTarget.label === undefined ? {} : { label: suppliedEvidence.semanticTarget.label }),
+        ...(suppliedEvidence.semanticTarget.testId === undefined ? {} : { testId: suppliedEvidence.semanticTarget.testId }),
+      };
+  const postcondition = suppliedEvidence?.postcondition === undefined
+    ? undefined
+    : {
+        ...(suppliedEvidence.postcondition.selector === undefined
+          ? {}
+          : { selector: suppliedEvidence.postcondition.selector }),
+        evidence: suppliedEvidence.postcondition.evidence,
+      };
   return {
     ...(role === undefined ? {} : { role }),
     ...(selector.startsWith("text=") ? { name: selector.slice("text=".length) } : {}),
     ...(label === undefined ? {} : { label }),
     ...(testId === undefined ? {} : { testId }),
     locatorCandidates,
+    ...(Object.keys(semanticTarget).length === 0 ? {} : { semanticTarget }),
+    ...(postcondition === undefined ? {} : { postcondition }),
+    ...(suppliedEvidence?.layoutOccupancy?.length ? { layoutOccupancy: suppliedEvidence.layoutOccupancy } : {}),
+    ...(suppliedEvidence?.safeCaptionRegions?.length ? { safeCaptionRegions: suppliedEvidence.safeCaptionRegions } : {}),
+    ...(suppliedEvidence?.confidence === undefined ? {} : { confidence: suppliedEvidence.confidence }),
+    ...(suppliedEvidence?.evidenceRefs?.length ? { evidenceRefs: suppliedEvidence.evidenceRefs } : {}),
   };
 }
 

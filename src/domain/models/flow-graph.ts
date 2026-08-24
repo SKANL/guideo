@@ -1,11 +1,35 @@
 import { z } from "zod";
 import { sha256 } from "../artifacts/canonical.js";
 
+const SemanticTargetSchema = z.object({
+  role: z.string().min(1).optional(),
+  accessibleName: z.string().min(1).optional(),
+  label: z.string().min(1).optional(),
+  testId: z.string().min(1).optional(),
+});
+const PostconditionEvidenceSchema = z.object({
+  selector: z.string().min(1).optional(),
+  evidence: z.string().min(1),
+});
+const LayoutOccupancySchema = z.object({
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  w: z.number().positive(),
+  h: z.number().positive(),
+});
+const CaptionSafeRegionSchema = z.enum(["lower-third", "top", "bottom-left", "bottom-right"]);
+
 const LocatorEvidenceSchema = z.object({
   candidates: z.array(z.string().min(1)).default([]),
   urlFingerprint: z.string().min(1).optional(),
   buildFingerprint: z.string().min(1).optional(),
   stateFingerprint: z.string().min(1).optional(),
+  semanticTarget: SemanticTargetSchema.optional(),
+  postcondition: PostconditionEvidenceSchema.optional(),
+  layoutOccupancy: z.array(LayoutOccupancySchema).optional(),
+  safeCaptionRegions: z.array(CaptionSafeRegionSchema).optional(),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+  evidenceRefs: z.array(z.string().min(1)).optional(),
 });
 
 export const FlowGraphNodeSchema = z.object({
@@ -53,6 +77,13 @@ function normalizeParsedFlowGraph(graph: FlowGraph): FlowGraph {
         ...(suppliedEvidence?.candidates ?? []),
         ...Object.values(selectors),
       ])].sort(compareStableStrings);
+      const layoutOccupancy = [...(suppliedEvidence?.layoutOccupancy ?? [])]
+        .sort((left, right) => compareStableStrings(
+          `${left.x}\u0000${left.y}\u0000${left.w}\u0000${left.h}`,
+          `${right.x}\u0000${right.y}\u0000${right.w}\u0000${right.h}`,
+        ));
+      const safeCaptionRegions = suppliedEvidence?.safeCaptionRegions ?? [];
+      const evidenceRefs = suppliedEvidence?.evidenceRefs ?? [];
       const locatorEvidence = candidates.length === 0 && suppliedEvidence === undefined
         ? undefined
         : {
@@ -62,6 +93,22 @@ function normalizeParsedFlowGraph(graph: FlowGraph): FlowGraph {
             ...(suppliedEvidence?.stateFingerprint === undefined
               ? {}
               : { stateFingerprint: suppliedEvidence.stateFingerprint }),
+            ...(suppliedEvidence?.semanticTarget === undefined
+              ? {}
+              : { semanticTarget: suppliedEvidence.semanticTarget }),
+            ...(suppliedEvidence?.postcondition === undefined
+              ? {}
+              : { postcondition: suppliedEvidence.postcondition }),
+            ...(layoutOccupancy.length === 0 ? {} : { layoutOccupancy }),
+            ...(safeCaptionRegions.length
+              ? { safeCaptionRegions: [...new Set(safeCaptionRegions)].sort(compareStableStrings) }
+              : {}),
+            ...(suppliedEvidence?.confidence === undefined
+              ? {}
+              : { confidence: suppliedEvidence.confidence }),
+            ...(evidenceRefs.length
+              ? { evidenceRefs: [...new Set(evidenceRefs)].sort(compareStableStrings) }
+              : {}),
           };
       return { ...node, selectors, ...(locatorEvidence === undefined ? {} : { locatorEvidence }) };
     })

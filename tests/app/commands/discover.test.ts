@@ -6,7 +6,7 @@ import { runDiscover } from "../../../src/app/commands/discover.js";
 import { projectPaths } from "../../../src/app/paths.js";
 import type { ArtifactManifest, ArtifactRef } from "../../../src/domain/artifacts/manifest.js";
 import { deriveCapabilityProfile } from "../../../src/domain/models/capability-profile.js";
-import type { FlowGraph } from "../../../src/domain/models/flow-graph.js";
+import { parseFlowGraph, type FlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { ArtifactStore } from "../../../src/domain/ports/artifact-store.js";
 import type { Target } from "../../../src/domain/ports/target.js";
 import type {
@@ -131,6 +131,42 @@ describe("runDiscover", () => {
     expect(deriveCapabilityProfile(base)).toEqual(deriveCapabilityProfile(reordered));
   });
 
+  it("preserves semantic occupancy evidence and safe caption regions in a deterministic profile", () => {
+    const graph = parseFlowGraph({
+      nodes: [
+        {
+          id: "https://example.test/invite",
+          feature: "invite",
+          useCase: "invite a teammate",
+          preconditions: [],
+          selectors: { invite: '[data-testid="invite"]' },
+          locatorEvidence: {
+            candidates: ['[data-testid="invite"]'],
+            semanticTarget: { role: "button", accessibleName: "Invite teammate", testId: "invite" },
+            postcondition: { selector: "[role=dialog]", evidence: "invite dialog is visible" },
+            layoutOccupancy: [{ x: 80, y: 500, w: 1040, h: 140 }],
+            safeCaptionRegions: ["top", "bottom-right"],
+            confidence: "high",
+            evidenceRefs: ["dom:invite", "screenshot:invite"],
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    const profile = deriveCapabilityProfile(graph);
+
+    expect(profile.evidence["https://example.test/invite"]).toMatchObject({
+      semanticTarget: { role: "button", accessibleName: "Invite teammate", testId: "invite" },
+      postcondition: { selector: "[role=dialog]", evidence: "invite dialog is visible" },
+      layoutOccupancy: [{ x: 80, y: 500, w: 1040, h: 140 }],
+      safeCaptionRegions: ["bottom-right", "top"],
+      confidence: "high",
+      evidenceRefs: ["dom:invite", "screenshot:invite"],
+    });
+    expect(deriveCapabilityProfile(graph)).toEqual(profile);
+  });
+
   it("calls Target.discover() and persists the returned FlowGraph as JSON at the CLI-owned path", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
@@ -195,6 +231,48 @@ describe("runDiscover", () => {
     await runDiscover({ target: second, artifactStore: store, usageLedger: ledger }, paths);
     expect(second.discoverCalls).toBe(0);
     expect(ledger.reserves).toBe(0);
+  });
+
+  it("reuses cached semantic evidence and only re-discovers after deterministic fingerprint invalidation", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    const graph: FlowGraph = parseFlowGraph({
+      nodes: [{
+        id: "n1", feature: "invite", useCase: "Invite", preconditions: [], selectors: { invite: "button" },
+        locatorEvidence: {
+          candidates: ["button"],
+          semanticTarget: { role: "button", accessibleName: "Invite" },
+          layoutOccupancy: [{ x: 0, y: 0, w: 10, h: 10 }],
+          safeCaptionRegions: ["top"], confidence: "medium", evidenceRefs: ["dom:invite"],
+        },
+      }],
+      edges: [],
+    });
+    const store = new MemoryArtifactStore();
+    await runDiscover({
+      target: { discover: async () => graph, getDiscoveryFingerprint: async () => ({ content: "content-v1" }) },
+      artifactStore: store,
+    }, paths);
+
+    let cachedDiscoverCalls = 0;
+    await runDiscover({
+      target: {
+        discover: async () => { cachedDiscoverCalls += 1; throw new Error("LLM/page discovery must not run"); },
+        getDiscoveryFingerprint: async () => ({ content: "content-v1" }),
+      },
+      artifactStore: store,
+    }, paths);
+    expect(cachedDiscoverCalls).toBe(0);
+
+    let invalidatedDiscoverCalls = 0;
+    await runDiscover({
+      target: {
+        discover: async () => { invalidatedDiscoverCalls += 1; return graph; },
+        getDiscoveryFingerprint: async () => ({ content: "content-v2" }),
+      },
+      artifactStore: store,
+    }, paths);
+    expect(invalidatedDiscoverCalls).toBe(1);
   });
 
   it("invalidates the cached graph and profile when a target fingerprint changes", async () => {

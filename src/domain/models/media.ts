@@ -111,9 +111,13 @@ export interface Subtitle {
   readonly durationMs: number;
 }
 
+/** Delivery composition remains explicit while a raw browser capture stays 16:9. */
+export type RenderProfileName = "youtube" | "shorts" | "square";
+export type DeliveryAspectRatio = "16:9" | "9:16" | "1:1";
+
 export interface FinalVideo {
   readonly path: string;
-  readonly aspectRatio: "16:9";
+  readonly aspectRatio: DeliveryAspectRatio;
   readonly provenance?: { readonly schema: string; readonly version: number; readonly sha256: string };
 }
 

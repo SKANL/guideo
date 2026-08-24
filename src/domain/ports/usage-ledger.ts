@@ -8,6 +8,8 @@ export interface UsageResult extends UsageEstimate {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly characters?: number;
+  /** Cost avoided by an idempotent cache hit, in the same unit. */
+  readonly avoidedAmount?: number;
 }
 /** @deprecated Use UsageResult. Retained while callers migrate. */
 export interface UsageActual { readonly cost: number; readonly cached: boolean; }
@@ -18,7 +20,7 @@ export interface BudgetRequest {
   readonly estimated?: number;
 }
 export interface Reservation { readonly id: string; readonly request: BudgetRequest; }
-export interface UsageSnapshot { readonly spent: number; readonly reserved: number; readonly unit?: UsageUnit; }
+export interface UsageSnapshot { readonly spent: number; readonly reserved: number; readonly unit?: UsageUnit; /** Additive cache telemetry; absent for legacy ledgers. */ readonly cacheHits?: number; readonly cacheSavings?: number; }
 export type UsageCommit = UsageResult | UsageActual;
 export interface UsageLedger {
   reserve(request: BudgetRequest): Promise<Reservation>;

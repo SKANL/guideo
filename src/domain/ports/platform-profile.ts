@@ -1,4 +1,4 @@
-import type { Audio, FinalVideo, PlatformMetrics, RawClip, Subtitle } from "../models/media.js";
+import type { Audio, FinalVideo, PlatformMetrics, RawClip, RenderProfileName, Subtitle } from "../models/media.js";
 import type { NarrationMode } from "../models/narration-mode.js";
 
 export interface ComposeParams {
@@ -12,6 +12,8 @@ export interface ComposeParams {
   // "voice" -> mux audioTracks, no subtitle stream; "both" -> mux audioTracks + soft (mov_text)
   // subtitle stream; "subtitles" -> silent output (no audio), subtitles burned into the video.
   readonly narration?: NarrationMode;
+  // Explicit output composition. Omitted keeps the established YouTube 16:9 delivery.
+  readonly renderProfile?: RenderProfileName;
 }
 
 export interface PlatformProfile {
