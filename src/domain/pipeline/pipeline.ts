@@ -13,7 +13,7 @@ import type { VoiceGen } from "../ports/voice-gen.js";
 import type { UsageLedger } from "../ports/usage-ledger.js";
 import type { UsageEstimate, UsageResult } from "../ports/usage-ledger.js";
 import { deriveSceneArtifactKey, type SceneArtifactCache } from "./scene-artifact-cache.js";
-import { deriveSubtitles } from "./subtitles.js";
+import { captionLayoutHintsFromResolvedEffects, deriveSubtitles } from "./subtitles.js";
 
 // trimPreRoll (privacy/alignment fix, design doc section C, sub-project 5a): whether to cut the
 // login/overlay-dismiss footage recorded before scene 0 from the output. Defaults to true —
@@ -254,8 +254,17 @@ class SceneAssembleStage implements PipelineStage {
   readonly name = "scene-assemble";
   constructor(private readonly assembler: SceneAssembler) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
+    const sourceClip = requireClip(ctx, this.name);
     const rawClip = await this.assembler.assemble(ctx.sceneClips);
-    return { ...ctx, rawClip };
+    // Assembly creates a new media artifact but no new UI geometry. Carry the capture-resolved
+    // regions forward so caption layout can avoid the action/result UI without re-querying it.
+    return {
+      ...ctx,
+      rawClip: {
+        ...rawClip,
+        ...(sourceClip.resolvedEffects ? { resolvedEffects: sourceClip.resolvedEffects } : {}),
+      },
+    };
   }
 }
 
@@ -273,7 +282,14 @@ class DeriveSubtitlesStage implements PipelineStage {
   async run(ctx: RenderContext): Promise<RenderContext> {
     if (ctx.narration === "voice" || ctx.narration === "silent") return ctx;
     const clip = requireClip(ctx, this.name);
-    return { ...ctx, subtitles: deriveSubtitles(ctx.script, clip.scenes) };
+    return {
+      ...ctx,
+      subtitles: deriveSubtitles(
+        ctx.script,
+        clip.scenes,
+        captionLayoutHintsFromResolvedEffects(clip.resolvedEffects),
+      ),
+    };
   }
 }
 

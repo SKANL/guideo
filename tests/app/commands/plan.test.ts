@@ -184,7 +184,7 @@ describe("runPlan", () => {
     const result = await runPlan({ scriptGen }, brief, paths);
 
     expect(result.storyboard.steps[0]?.effects).toContainEqual({
-      type: "zoom-in",
+      type: "crop",
       params: expect.objectContaining({ selector: "#invite-btn" }),
     });
     const writtenStoryboard = JSON.parse(await readFile(paths.storyboardPath, "utf8"));
@@ -201,13 +201,13 @@ describe("runPlan", () => {
     const result = await runPlan({ scriptGen }, brief, paths, { motionEmphasisEnabled: true });
 
     expect(result.storyboard.steps[0]?.effects).toContainEqual({
-      type: "zoom-in",
+      type: "crop",
       params: {
         selector: "#invite-btn",
         semanticTarget: "Invite teammate",
-        level: 1.25,
-        entryMs: 225,
-        exitMs: 1275,
+        emphasis: "spotlight",
+        entryMs: 300,
+        exitMs: 1200,
       },
     });
   });

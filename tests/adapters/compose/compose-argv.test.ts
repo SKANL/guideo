@@ -315,7 +315,7 @@ describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in cap
       "-i",
       "clip.mp4",
       "-vf",
-      "subtitles='subs.srt':force_style='Fontsize=18,Alignment=2,MarginV=72,Outline=1,Shadow=1'",
+      "subtitles='subs.srt':force_style='Fontsize=11,MarginV=28,MarginL=72,MarginR=72,Outline=1,Shadow=0'",
       "-map",
       "0:v",
       "-c:v",
@@ -356,7 +356,7 @@ describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in cap
     const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
 
     expect(argv[argv.indexOf("-vf") + 1]).toContain(
-      "force_style='Fontsize=18,Alignment=2,MarginV=72,Outline=1,Shadow=1'",
+      "force_style='Fontsize=11,MarginV=28,MarginL=72,MarginR=72,Outline=1,Shadow=0'",
     );
   });
 

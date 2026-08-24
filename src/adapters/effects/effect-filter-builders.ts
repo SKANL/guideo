@@ -11,7 +11,7 @@
 // do their size-changing work (crop+scale, crop+boxblur) on a `split` side-branch, and only gate
 // the final `overlay` back onto the untouched base stream — overlay never changes the base's size,
 // enabled or not. `crop` avoids the problem entirely by not touching viewport size at all: it
-// spotlights the region with four gated black `drawbox` bars instead of a literal viewport crop.
+// spotlights the region with a gated translucent outline instead of a literal viewport crop.
 //
 // EVERY builder now takes an already-RESOLVED `region` (spatial target) as an explicit argument —
 // callers (effects-graph.ts) resolve it once, combining the capture-time resolved element
@@ -113,14 +113,9 @@ const buildCrop: FilterBuilder = (_effect, gate, region, inLabel, outLabel) => {
   }
   const { x, y, w, h } = region;
   const enable = enableClause(gate);
-  return (
-    `${inLabel}` +
-    `drawbox=x=0:y=0:w=iw:h=${y}:color=black:t=fill:${enable},` +
-    `drawbox=x=0:y=${y + h}:w=iw:h=ih-${y + h}:color=black:t=fill:${enable},` +
-    `drawbox=x=0:y=${y}:w=${x}:h=${h}:color=black:t=fill:${enable},` +
-    `drawbox=x=${x + w}:y=${y}:w=iw-${x + w}:h=${h}:color=black:t=fill:${enable}` +
-    `${outLabel}`
-  );
+  // Opaque outside masks made physical renders look black/frozen. This preserves the full UI
+  // and output dimensions while adding only a deterministic focal outline during the gate.
+  return `${inLabel}drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=white@0.9:t=4:${enable}${outLabel}`;
 };
 
 const buildBlurRegion: FilterBuilder = (_effect, gate, region, inLabel, outLabel, uid) => {

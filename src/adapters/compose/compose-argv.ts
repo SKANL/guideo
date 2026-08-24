@@ -24,7 +24,8 @@ function escapeForSubtitlesFilter(path: string): string {
 
 // Bottom-center captions remain within the 1080p action-safe area and use a restrained readable
 // size. This applies only to hardsubs; soft subtitle tracks preserve user-player styling.
-const BURNED_CAPTION_STYLE = "Fontsize=18,Alignment=2,MarginV=72,Outline=1,Shadow=1";
+// Do not force Alignment here: each SRT cue's \an override is the authoritative safe placement.
+const BURNED_CAPTION_STYLE = "Fontsize=11,MarginV=28,MarginL=72,MarginR=72,Outline=1,Shadow=0";
 
 function burnedSubtitleFilter(path: string): string {
   return `subtitles=${escapeForSubtitlesFilter(path)}:force_style='${BURNED_CAPTION_STYLE}'`;

@@ -30,18 +30,20 @@ export function applyDirectorDefaults(
   config: Partial<DirectorConfig> = {},
 ): Storyboard {
   const cfg = { ...DEFAULT_DIRECTOR_CONFIG, ...config };
-  if (!cfg.motionEmphasisEnabled && !cfg.zoomDefaultsEnabled) return storyboard;
+  // The legacy option is retained in the config contract, but it must not turn selector evidence
+  // back into a zoom. Only the semantic-emphasis mode can compile an explicit focus cue.
+  if (!cfg.motionEmphasisEnabled) return storyboard;
 
   const steps = [...storyboard.steps];
   const plan = deriveMotionPlan(storyboard, script);
-  const zoomedSegments = new Set<string>();
+  const zoomedSteps = new Set<number>();
   for (const actionBeat of plan.beats) {
-    if (actionBeat.kind !== "action" || actionBeat.intent !== "attention" || !actionBeat.target)
+    if (actionBeat.kind !== "action" || actionBeat.intent !== "action" || !actionBeat.target)
       continue;
     const step = steps[actionBeat.stepIndex];
     if (!step || step.effects.length > 0) continue;
     const reactionBeat = plan.beats.find(
-      (beat) => beat.stepIndex === actionBeat.stepIndex && beat.kind === "reaction",
+      (beat) => beat.stepIndex === actionBeat.stepIndex && beat.kind === "result",
     );
     if (!step || !reactionBeat) continue;
     const segmentStartMs = script.segments.find(
@@ -65,18 +67,19 @@ export function applyDirectorDefaults(
         },
       });
     }
-    const legacyZoom = cfg.zoomDefaultsEnabled && Boolean(actionBeat.target.evidence);
-    if ((actionBeat.zoomEligible || legacyZoom) && !zoomedSegments.has(actionBeat.narrationSegmentId)) {
+    // A zoom is never a clock tick; deriveMotionPlan only sets zoomEligible for requiresFocus.
+    if (actionBeat.zoomEligible && !zoomedSteps.has(actionBeat.stepIndex)) {
       nextStep = withAddedEffect(nextStep, {
         type: "zoom-in",
         params: {
           selector: actionBeat.target.selector,
           semanticTarget: actionBeat.target.evidence,
+          postcondition: actionBeat.postcondition?.evidence,
           level: cfg.zoomLevel,
           ...timing,
         },
       });
-      zoomedSegments.add(actionBeat.narrationSegmentId);
+      zoomedSteps.add(actionBeat.stepIndex);
     }
     steps[actionBeat.stepIndex] = nextStep;
   }

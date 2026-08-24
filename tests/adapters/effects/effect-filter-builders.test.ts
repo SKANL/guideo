@@ -106,7 +106,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
   });
 
   describe("crop — spotlights the resolved region, never touching frame size", () => {
-    it("spotlights the region with four gated black drawbox bars", () => {
+    it("draws a gated translucent outline without blacking out the surrounding UI", () => {
       const effect: Effect = { type: "crop", params: {} };
 
       const fragment = filterBuilderRegistry.crop?.(
@@ -119,13 +119,10 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       );
 
       expect(fragment).toBe(
-        "[0:v]" +
-          "drawbox=x=0:y=0:w=iw:h=20:color=black:t=fill:enable='between(t,1.5,4)'," +
-          "drawbox=x=0:y=70:w=iw:h=ih-70:color=black:t=fill:enable='between(t,1.5,4)'," +
-          "drawbox=x=0:y=20:w=10:h=50:color=black:t=fill:enable='between(t,1.5,4)'," +
-          "drawbox=x=110:y=20:w=iw-110:h=50:color=black:t=fill:enable='between(t,1.5,4)'" +
-          "[v1]",
+        "[0:v]drawbox=x=10:y=20:w=100:h=50:color=white@0.9:t=4:enable='between(t,1.5,4)'[v1]",
       );
+      expect(fragment).not.toContain("color=black");
+      expect(fragment).not.toContain("t=fill");
     });
 
     it("returns null (skip) when no region was resolved instead of crashing", () => {

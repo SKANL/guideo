@@ -70,6 +70,7 @@ export function buildSceneEffectsGraph(
   const fragments: string[] = [];
   let currentLabel = "[0:v]";
   let uid = 0;
+  const focalGates: Array<{ startSec: number; endSec: number }> = [];
   // Global positional index across ALL of the original clip's steps' effects, in storyboard
   // order — must line up with clip.resolvedEffects regardless of which scene a step belongs to.
   let effectIndex = -1;
@@ -91,11 +92,19 @@ export function buildSceneEffectsGraph(
         continue;
       }
       const region = resolveRegion(clip, effectIndex, effect);
+      const gate = effectGate(effect, sceneClip.durationMs);
+      if (effect.type === "zoom-in" || effect.type === "zoom-out") {
+        const overlaps = focalGates.some((focal) => gate.startSec < focal.endSec && focal.startSec < gate.endSec);
+        if (overlaps) {
+          console.warn("[effects] skipping overlapping focal zoom.");
+          continue;
+        }
+      }
       uid += 1;
       const nextLabel = `[v${uid}]`;
       const fragment = builder(
         effect,
-        effectGate(effect, sceneClip.durationMs),
+        gate,
         region,
         currentLabel,
         nextLabel,
@@ -106,6 +115,7 @@ export function buildSceneEffectsGraph(
         continue;
       }
       fragments.push(fragment);
+      if (effect.type === "zoom-in" || effect.type === "zoom-out") focalGates.push(gate);
       currentLabel = nextLabel;
     }
   }

@@ -15,7 +15,8 @@ describe("applyDirectorDefaults", () => {
           action: "click",
           selector: "#invite",
           narrationSegmentId: "seg-1",
-          evidence: { reference: "Invite teammate" },
+          params: { requiresFocus: true },
+          evidence: { reference: "Invite teammate", expectedPostState: "Invite dialog is open" },
         },
       ],
     });
@@ -30,7 +31,8 @@ describe("applyDirectorDefaults", () => {
           action: "click",
           selector: "#invite",
           narrationSegmentId: "seg-1",
-          evidence: { reference: "Invite teammate" },
+          params: { requiresFocus: true },
+          evidence: { reference: "Invite teammate", expectedPostState: "Invite dialog is open" },
         },
       ],
     });
@@ -42,9 +44,10 @@ describe("applyDirectorDefaults", () => {
       params: {
         selector: "#invite",
         semanticTarget: "Invite teammate",
+        postcondition: "Invite dialog is open",
         level: 1.25,
-        entryMs: 150,
-        exitMs: 850,
+        entryMs: 400,
+        exitMs: 1000,
       },
     });
   });
@@ -93,10 +96,10 @@ describe("applyDirectorDefaults", () => {
 
     expect(
       applyDirectorDefaults(storyboard, script, { zoomDefaultsEnabled: true }).steps[0]?.effects,
-    ).toHaveLength(1);
+    ).toEqual([]);
   });
 
-  it("uses a timed spotlight for every semantic action but only one valuable zoom per narration segment", () => {
+  it("uses a timed spotlight for every semantic action and never invents a zoom without a focus cue", () => {
     const storyboard = parseStoryboard({
       steps: [
         { action: "click", selector: "#invite", narrationSegmentId: "seg-1", evidence: { reference: "Invite teammate" } },
@@ -105,10 +108,10 @@ describe("applyDirectorDefaults", () => {
     });
     const result = applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true });
     expect(result.steps.flatMap((step) => step.effects).filter((effect) => effect.type === "crop")).toHaveLength(2);
-    expect(result.steps.flatMap((step) => step.effects).filter((effect) => effect.type === "zoom-in")).toHaveLength(1);
+    expect(result.steps.flatMap((step) => step.effects).filter((effect) => effect.type === "zoom-in")).toHaveLength(0);
     expect(result.steps[0]?.effects).toContainEqual({
       type: "crop",
-      params: expect.objectContaining({ selector: "#invite", entryMs: 75, exitMs: 425 }),
+      params: expect.objectContaining({ selector: "#invite", entryMs: 100, exitMs: 400 }),
     });
   });
 
@@ -117,6 +120,17 @@ describe("applyDirectorDefaults", () => {
       steps: [{ action: "click", selector: "#invite", narrationSegmentId: "seg-1" }],
     });
     const effects = applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true }).steps[0]?.effects;
+    expect(effects).toContainEqual({ type: "crop", params: expect.objectContaining({ selector: "#invite" }) });
+    expect(effects?.some((effect) => effect.type === "zoom-in")).toBe(false);
+  });
+
+  it("uses a stable callout rather than an arbitrary zoom when the action has no verified postcondition", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "click", selector: "#invite", narrationSegmentId: "seg-1" }],
+    });
+
+    const effects = applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true }).steps[0]?.effects;
+
     expect(effects).toContainEqual({ type: "crop", params: expect.objectContaining({ selector: "#invite" }) });
     expect(effects?.some((effect) => effect.type === "zoom-in")).toBe(false);
   });

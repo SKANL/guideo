@@ -13,11 +13,11 @@ describe("toSrt", () => {
       [
         "1",
         "00:00:00,000 --> 00:00:01,500",
-        "{\\an2\\fs18\\bord1\\shad1}Let's log in.",
+        "{\\an2\\pos(640,630)\\fs11\\bord1\\shad0}Let's log in.",
         "",
         "2",
         "00:01:05,250 --> 00:01:07,250",
-        "{\\an2\\fs18\\bord1\\shad1}Click submit.",
+        "{\\an2\\pos(640,630)\\fs11\\bord1\\shad0}Click submit.",
         "",
       ].join("\n"),
     );
@@ -25,7 +25,13 @@ describe("toSrt", () => {
 
   it("adds a compact, bottom-safe presentation style to every cue", () => {
     expect(toSrt([{ text: "Caption", startMs: 0, durationMs: 1000 }])).toContain(
-      "{\\an2\\fs18\\bord1\\shad1}",
+      "{\\an2\\pos(640,630)\\fs11\\bord1\\shad0}",
+    );
+  });
+
+  it("uses the cue's deterministic safe placement rather than always centering over the UI", () => {
+    expect(toSrt([{ text: "Caption", startMs: 0, durationMs: 1000, placement: "top" }])).toContain(
+      "{\\an8\\pos(640,40)\\fs11\\bord1\\shad0}",
     );
   });
 });

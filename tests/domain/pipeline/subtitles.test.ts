@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseScript } from "../../../src/domain/models/script.js";
-import { deriveSubtitles } from "../../../src/domain/pipeline/subtitles.js";
+import { captionLayoutHintsFromResolvedEffects, deriveSubtitles } from "../../../src/domain/pipeline/subtitles.js";
 
 const script = parseScript({
   segments: [
@@ -51,5 +51,46 @@ describe("deriveSubtitles", () => {
     expect(subtitles[0]).toMatchObject({ startMs: 1000 });
     expect(subtitles.at(-1)!.startMs + subtitles.at(-1)!.durationMs).toBe(6000);
     expect(subtitles.slice(1).every((subtitle, index) => subtitle.startMs === subtitles[index]!.startMs + subtitles[index]!.durationMs)).toBe(true);
+  });
+
+  it("prefers phrase boundaries before hard wrapping into short rhythmic cues", () => {
+    const rhythmicScript = parseScript({
+      segments: [{
+        id: "seg-1",
+        text: "Open the menu, then choose the team workspace. Finally, select the member to invite.",
+        timing: { startMs: 0, durationMs: 6000 },
+      }],
+    });
+
+    const subtitles = deriveSubtitles(rhythmicScript, [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 6000 }]);
+
+    expect(subtitles.length).toBeGreaterThanOrEqual(3);
+    expect(subtitles.map((subtitle) => subtitle.text.replace("\n", " ")).join(" ")).toBe(
+      "Open the menu, then choose the team workspace. Finally, select the member to invite.",
+    );
+    expect(subtitles.every((subtitle) => subtitle.text.split("\n").every((line) => line.length <= 26))).toBe(true);
+    expect(subtitles.every((subtitle) => subtitle.text.split("\n").length <= 2)).toBe(true);
+  });
+
+  it("keeps captions compact and selects a non-overlapping safe placement when the lower third is occupied", () => {
+    const subtitles = deriveSubtitles(
+      script,
+      [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }],
+      { occupiedRegions: [{ x: 0, y: 430, w: 1280, h: 290 }] },
+    );
+
+    expect(subtitles[0]).toMatchObject({ placement: "top" });
+    expect(subtitles[0]?.text.split("\n")).toHaveLength(1);
+  });
+
+  it("derives occupied regions per narration segment from capture-resolved effects", () => {
+    const hints = captionLayoutHintsFromResolvedEffects([
+      { narrationSegmentId: "seg-1", type: "crop", region: { x: 0, y: 430, w: 1280, h: 290 } },
+      { narrationSegmentId: "seg-2", type: "crop", region: { x: 10, y: 10, w: 30, h: 30 } },
+    ]);
+
+    expect(deriveSubtitles(script, [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1500 }], hints.get("seg-1"))).toMatchObject([
+      { placement: "top" },
+    ]);
   });
 });

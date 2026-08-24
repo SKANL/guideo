@@ -274,7 +274,9 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
 
     const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
-    expect(graph?.filterComplex).toContain("drawbox=x=0:y=0:w=iw:h=20");
+    expect(graph?.filterComplex).toContain("drawbox=x=10:y=20:w=100:h=50:color=white@0.9:t=4");
+    expect(graph?.filterComplex).not.toContain("color=black");
+    expect(graph?.filterComplex).not.toContain("t=fill");
   });
 
   it("falls back to the frame center for zoom-in when neither resolvedEffects nor explicit params supply a region", () => {

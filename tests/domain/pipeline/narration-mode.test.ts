@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
+import type { Audio, FinalVideo, RawClip, ResolvedEffect } from "../../../src/domain/models/media.js";
 import type { NarrationSegment, Script } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import type { ApprovedStoryboard } from "../../../src/domain/models/storyboard.js";
@@ -18,6 +18,7 @@ import { review } from "../../../src/domain/review-gate.js";
 class FakeRecordingEngine implements RecordingEngine {
   captureCalls = 0;
   lastSegmentDurationsMs: ReadonlyMap<string, number> | undefined;
+  constructor(private readonly resolvedEffects?: readonly ResolvedEffect[]) {}
   async capture(
     _approved: ApprovedStoryboard,
     segmentDurationsMs: ReadonlyMap<string, number>,
@@ -28,7 +29,10 @@ class FakeRecordingEngine implements RecordingEngine {
     // target came from the Script's planned timing or synthesized audio) — subtitle timing must
     // follow this ASSEMBLED real duration, not whatever target was originally passed to capture.
     const durationMs = segmentDurationsMs.get("seg-1") ?? 1500;
-    return { path: "clip.mp4", durationMs, aspectRatio: "16:9", scenes: [], preRollMs: 0 };
+    return {
+      path: "clip.mp4", durationMs, aspectRatio: "16:9", scenes: [], preRollMs: 0,
+      ...(this.resolvedEffects ? { resolvedEffects: this.resolvedEffects } : {}),
+    };
   }
 }
 
@@ -188,4 +192,16 @@ describe("render() narration modes", () => {
     expect(profile.lastParams?.audioTracks).toEqual([]);
     expect(profile.lastParams?.subtitles).toEqual([]);
     expect(profile.lastParams?.narration).toBe("silent");
+  });
+
+  it("moves captions above a lower-third capture-resolved UI target without changing the Subtitle port shape", async () => {
+    const { ports, profile } = makePorts();
+    const resolvedEffects: readonly ResolvedEffect[] = [
+      { narrationSegmentId: "seg-1", type: "crop", region: { x: 0, y: 430, w: 1280, h: 290 } },
+    ];
+
+    await render({ ...ports, recordingEngine: new FakeRecordingEngine(resolvedEffects) }, makeApproved(), script, "final.mp4", { narration: "subtitles" });
+
+    expect(profile.lastParams?.subtitles[0]).toMatchObject({ placement: "top" });
+    expect(profile.lastParams?.subtitles[0]).toEqual({ text: "Let's log in.", startMs: 0, durationMs: 4200 });
   });
