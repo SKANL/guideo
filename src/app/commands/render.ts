@@ -17,6 +17,7 @@ import type { SceneAssembler } from "../../domain/ports/scene-assembler.js";
 import type { SceneSplitter } from "../../domain/ports/scene-splitter.js";
 import type { VoiceGen } from "../../domain/ports/voice-gen.js";
 import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
+import type { ArtifactStore } from "../../domain/ports/artifact-store.js";
 import { reviewWithManifest } from "../../domain/review-gate.js";
 import { assertQuality } from "../../domain/quality/quality-gate.js";
 import type { MediaProbe } from "../../domain/ports/media-probe.js";
@@ -24,7 +25,7 @@ import { toSrt } from "../../adapters/compose/srt.js";
 import { type GuideoPaths, projectPaths } from "../paths.js";
 
 export async function runRender(
-  container: { readonly recordingEngine: RecordingEngine; readonly preRollTrimmer: PreRollTrimmer; readonly privacyCutter: PrivacyCutter; readonly effectsEngine: EffectsEngine; readonly sceneSplitter: SceneSplitter; readonly sceneAssembler: SceneAssembler; readonly voiceGen: VoiceGen; readonly platformProfile: PlatformProfile; readonly mediaProbe?: MediaProbe; readonly usageLedger?: UsageLedger },
+  container: { readonly recordingEngine: RecordingEngine; readonly preRollTrimmer: PreRollTrimmer; readonly privacyCutter: PrivacyCutter; readonly effectsEngine: EffectsEngine; readonly sceneSplitter: SceneSplitter; readonly sceneAssembler: SceneAssembler; readonly voiceGen: VoiceGen; readonly platformProfile: PlatformProfile; readonly mediaProbe?: MediaProbe; readonly usageLedger?: UsageLedger; readonly artifactStore?: ArtifactStore },
   approve: boolean,
   paths: GuideoPaths = projectPaths({ project: "default" }),
   narration: NarrationMode = "both",
@@ -51,7 +52,7 @@ export async function runRender(
     startMs: visibleSegments.slice(0, index).reduce((total, item) => total + item.timing.durationMs, 0),
     durationMs: segment.timing.durationMs,
   }));
-  const reservation = await container.usageLedger?.reserve({ operation: "render", estimated: 1 });
+  const reservation = await container.usageLedger?.reserve({ operation: "render", estimate: { unit: "usd-micros", amount: 0 } });
   const token = randomUUID();
   const temporaryVideoPath = join(dirname(paths.outputPath), `.${token}.mp4`);
   const temporaryCaptionsPath = join(dirname(paths.captionsPath), `.${token}.srt`);
@@ -63,13 +64,21 @@ export async function runRender(
     externalWorkCompleted = true;
     await writeFile(temporaryCaptionsPath, toSrt(captionSegments), "utf8");
     if (container.mediaProbe) assertQuality(await container.mediaProbe.probe(video.path), { expectedDurationMs: visibleSegments.reduce((total, segment) => total + segment.timing.durationMs, 0), minimumDurationRatio: 0.9, expectedSegments: visibleSegments.length, actualSegments: visibleSegmentIds.size, narration, captionsRequired: true, hasCaptions: (await readFile(temporaryCaptionsPath, "utf8")).trim().length > 0 });
-    if (reservation) await container.usageLedger!.commit(reservation.id, { cost: 1, cached: false });
+    let provenance: FinalVideo["provenance"];
+    if (container.artifactStore) {
+      const ref = await container.artifactStore.finalize((async function* () { yield await readFile(video.path); })(), { schema: "guideo.final-video", version: 1, inputs: { approval: manifest.sha256, video: sha256({ path: video.path }), captions: sha256(await readFile(temporaryCaptionsPath, "utf8")) }, finalized: true });
+      provenance = ref;
+    }
+    if (reservation) await container.usageLedger!.commit(reservation.id, { unit: "usd-micros", amount: 0, cache: "miss", provider: "guideo-render" });
     await rename(video.path, paths.outputPath);
     await rename(temporaryCaptionsPath, paths.captionsPath);
-    return { ...video, path: paths.outputPath };
+    return { ...video, path: paths.outputPath, ...(provenance ? { provenance } : {}) };
   } catch (error) {
-    await Promise.all([unlink(temporaryVideoPath).catch(() => undefined), unlink(temporaryCaptionsPath).catch(() => undefined)]);
+    // Two filesystem renames cannot be one OS-atomic operation. If either promotion fails, remove
+    // both destination members so callers never observe a new MP4 without its required captions.
+    await Promise.all([unlink(temporaryVideoPath).catch(() => undefined), unlink(temporaryCaptionsPath).catch(() => undefined), unlink(paths.outputPath).catch(() => undefined), unlink(paths.captionsPath).catch(() => undefined)]);
     if (reservation && !externalWorkCompleted) await container.usageLedger!.release(reservation.id, "render failed");
+    if (externalWorkCompleted) await container.artifactStore?.quarantine(token, error instanceof Error ? error.message : String(error));
     throw error;
   }
 }

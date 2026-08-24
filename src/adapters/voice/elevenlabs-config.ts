@@ -14,6 +14,8 @@ export interface VoiceCalibration {
   readonly useSpeakerBoost: boolean;
   // 1.0 = normal pace.
   readonly speed: number;
+  /** Account-specific USD micros charged per input character. */
+  readonly costPerCharacterMicros: number;
 }
 
 export const DEFAULT_VOICE_CALIBRATION: VoiceCalibration = {
@@ -30,4 +32,5 @@ export const DEFAULT_VOICE_CALIBRATION: VoiceCalibration = {
   style: 0.3,
   useSpeakerBoost: true,
   speed: 1.0,
+  costPerCharacterMicros: 0,
 };

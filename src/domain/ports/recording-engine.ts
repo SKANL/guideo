@@ -1,4 +1,4 @@
-import type { RawClip } from "../models/media.js";
+import type { CaptureCheckpoint, RawClip } from "../models/media.js";
 import type { ApprovedStoryboard } from "../models/storyboard.js";
 
 // capture() requires ApprovedStoryboard, not Storyboard — this is the compile-time hard-stop
@@ -16,4 +16,11 @@ export interface RecordingEngine {
     storyboard: ApprovedStoryboard,
     segmentDurationsMs?: ReadonlyMap<string, number>,
   ): Promise<RawClip>;
+}
+
+/** Durable capture state is optional so existing RecordingEngine callers remain compatible. */
+export interface CaptureCheckpointStore {
+  load(inputSha256: string): Promise<{ readonly checkpoint: CaptureCheckpoint; readonly finalized?: RawClip } | null>;
+  save(checkpoint: CaptureCheckpoint): Promise<void>;
+  finalize(inputSha256: string, clip: RawClip): Promise<void>;
 }

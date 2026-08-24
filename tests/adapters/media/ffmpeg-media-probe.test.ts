@@ -7,7 +7,16 @@ describe("FfmpegMediaProbe", () => {
       stderr: "Duration: 00:01:02.500, start: 0.000000, bitrate: 1000 kb/s\\nStream #0:0: Video: h264\\nStream #0:1: Audio: aac",
     }));
 
-    await expect(probe.probe("output.mp4")).resolves.toEqual({ durationMs: 62_500, hasVideo: true, hasAudio: true });
+    await expect(probe.probe("output.mp4")).resolves.toMatchObject({
+      durationMs: 62_500,
+      hasVideo: true,
+      hasAudio: true,
+      videoCodec: "h264",
+      audioCodec: "aac",
+      videoStreams: 1,
+      audioStreams: 1,
+      evidence: { command: "ffprobe", path: "output.mp4" },
+    });
   });
 
   it("surfaces a probe failure when ffmpeg returns no media metadata", async () => {

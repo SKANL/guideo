@@ -14,6 +14,8 @@ import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import type { Audio } from "../../domain/models/media.js";
 import type { NarrationSegment } from "../../domain/models/script.js";
 import type { VoiceGen } from "../../domain/ports/voice-gen.js";
+import type { UsageResult } from "../../domain/ports/usage-ledger.js";
+import type { UsageEstimate } from "../../domain/ports/usage-ledger.js";
 import { DEFAULT_VOICE_CALIBRATION, type VoiceCalibration } from "./elevenlabs-config.js";
 
 export interface ElevenLabsVoiceSettings {
@@ -108,11 +110,24 @@ export class ElevenLabsVoice implements VoiceGen {
     const path = join(workDir, `${segment.id}-${randomUUID()}.mp3`);
     await writeFile(path, bytes);
 
-    return {
+    const audio = {
       segmentId: segment.id,
       path,
       durationMs: estimateDurationMs(bytes.length, outputFormat, segment.timing.durationMs),
     };
+    return audio;
+  }
+
+  async synthesizeWithUsage(segment: NarrationSegment): Promise<{ audio: Audio; usage: UsageResult }> {
+    if (!Number.isSafeInteger(this.calibration.costPerCharacterMicros) || this.calibration.costPerCharacterMicros <= 0) {
+      throw new Error("ElevenLabs provider-cost accounting requires a positive costPerCharacterMicros calibration");
+    }
+    const audio = await this.synthesize(segment);
+    return { audio, usage: { unit: "usd-micros", amount: segment.text.length * this.calibration.costPerCharacterMicros, cache: "miss", provider: "elevenlabs", model: this.calibration.modelId, characters: segment.text.length } };
+  }
+
+  estimateUsage(segment: NarrationSegment): UsageEstimate {
+    return { unit: "usd-micros", amount: segment.text.length * this.calibration.costPerCharacterMicros };
   }
 
   // Lazy: only reads env / constructs the real SDK client the first time synthesize() actually

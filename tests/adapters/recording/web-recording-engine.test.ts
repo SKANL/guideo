@@ -755,7 +755,7 @@ describe("WebRecordingEngine", () => {
       warn.mockRestore();
     });
 
-    it("logs a warning and skips a click step that can't be healed, without crashing the whole capture", async () => {
+    it("fails closed when a required click step cannot be healed", async () => {
       const harness = fakeCaptureHarness({
         clickThrowsFor: (selector) =>
           selector === "#a:visible" ? new Error(CONTEXT_DESTROYED_MESSAGE) : undefined,
@@ -768,12 +768,11 @@ describe("WebRecordingEngine", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
-      const clip = await engine.capture(approved);
+      await expect(engine.capture(approved)).rejects.toThrow(CONTEXT_DESTROYED_MESSAGE);
 
       // login submit click (1) + storyboard click's stepRetries(2)+1 bounded attempts (3) = 4.
       expect(harness.click).toHaveBeenCalledTimes(4);
-      expect(warn).toHaveBeenCalled();
-      expect(clip.durationMs).toBeGreaterThanOrEqual(0);
+      expect(warn).not.toHaveBeenCalled();
 
       warn.mockRestore();
     });

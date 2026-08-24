@@ -19,6 +19,7 @@ import type { RecordingEngine } from "../../../src/domain/ports/recording-engine
 import type { SceneAssembler } from "../../../src/domain/ports/scene-assembler.js";
 import type { SceneClip, SceneSplitter } from "../../../src/domain/ports/scene-splitter.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
+import type { BudgetRequest, Reservation, UsageCommit, UsageLedger, UsageSnapshot } from "../../../src/domain/ports/usage-ledger.js";
 import { review } from "../../../src/domain/review-gate.js";
 
 class FakeRecordingEngine implements RecordingEngine {
@@ -182,5 +183,24 @@ describe("pipeline stage composition", () => {
     await expect(
       render(makePorts(), makeApproved(), script, "final.mp4", {}, stages),
     ).rejects.toThrow(/FinalVideo/);
+  });
+
+  it("reserves before voice I/O and commits provider-measured usd-micros usage", async () => {
+    const events: string[] = [];
+    const voice = {
+      estimateUsage(): { unit: "usd-micros"; amount: number } { return { unit: "usd-micros", amount: 42 }; },
+      async synthesize(segment: NarrationSegment): Promise<Audio> { events.push("synthesize"); return { segmentId: segment.id, path: "one.mp3", durationMs: 1_000 }; },
+      async synthesizeWithUsage(segment: NarrationSegment) { events.push("with-usage"); return { audio: { segmentId: segment.id, path: "one.mp3", durationMs: 1_000 }, usage: { unit: "usd-micros" as const, amount: 42, cache: "hit" as const, provider: "elevenlabs", characters: segment.text.length } }; },
+    } satisfies VoiceGen & { estimateUsage(segment: NarrationSegment): { unit: "usd-micros"; amount: number }; synthesizeWithUsage(segment: NarrationSegment): Promise<{ audio: Audio; usage: { unit: "usd-micros"; amount: number; cache: "hit" | "miss"; provider: string; characters: number } }> };
+    const ledger: UsageLedger = {
+      async reserve(_request: BudgetRequest): Promise<Reservation> { events.push("reserve"); return { id: "voice", request: _request }; },
+      async commit(_id: string, actual: UsageCommit): Promise<void> { events.push(`commit:${"amount" in actual ? actual.amount : actual.cost}`); },
+      async release(): Promise<void> { events.push("release"); },
+      async snapshot(): Promise<UsageSnapshot> { return { spent: 0, reserved: 0, unit: "usd-micros" }; },
+    };
+
+    await render({ ...makePorts(), voiceGen: voice, usageLedger: ledger }, makeApproved(), script, "final.mp4");
+
+    expect(events).toEqual(["reserve", "with-usage", "commit:42"]);
   });
 });

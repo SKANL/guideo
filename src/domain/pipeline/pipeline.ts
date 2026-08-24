@@ -11,6 +11,7 @@ import type { SceneAssembler } from "../ports/scene-assembler.js";
 import type { SceneClip, SceneSplitter } from "../ports/scene-splitter.js";
 import type { VoiceGen } from "../ports/voice-gen.js";
 import type { UsageLedger } from "../ports/usage-ledger.js";
+import type { UsageEstimate, UsageResult } from "../ports/usage-ledger.js";
 import { deriveSubtitles } from "./subtitles.js";
 
 // trimPreRoll (privacy/alignment fix, design doc section C, sub-project 5a): whether to cut the
@@ -110,10 +111,16 @@ class SynthesizeVoiceStage implements PipelineStage {
     }
     const audioTracks: Audio[] = [];
     for (const segment of ctx.script.segments) {
-      const reservation = this.ledger ? await this.ledger.reserve({ operation: "voice", estimated: segment.timing.durationMs }) : null;
+      const usageVoice = this.voice as VoiceGen & {
+        estimateUsage?(segment: Script["segments"][number]): UsageEstimate;
+        synthesizeWithUsage?(segment: Script["segments"][number]): Promise<{ audio: Audio; usage: UsageResult }>;
+      };
+      const estimate = usageVoice.estimateUsage?.(segment) ?? { unit: "usd-micros" as const, amount: 0 };
+      const reservation = this.ledger ? await this.ledger.reserve({ operation: "voice", estimate }) : null;
       try {
-        const audio = await this.voice.synthesize(segment);
-        if (reservation) await this.ledger!.commit(reservation.id, { cost: audio.durationMs, cached: false });
+        const result = usageVoice.synthesizeWithUsage && estimate.amount > 0 ? await usageVoice.synthesizeWithUsage(segment) : { audio: await this.voice.synthesize(segment), usage: { unit: "usd-micros" as const, amount: 0, cache: "miss" as const, provider: "unknown" } };
+        const audio = result.audio;
+        if (reservation) await this.ledger!.commit(reservation.id, result.usage);
         audioTracks.push(audio);
       } catch (error) {
         if (reservation) await this.ledger!.release(reservation.id, error instanceof Error ? error.message : String(error));

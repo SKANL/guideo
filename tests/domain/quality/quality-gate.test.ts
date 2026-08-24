@@ -33,4 +33,41 @@ describe("quality gate", () => {
       "output is missing required captions sidecar",
     ]);
   });
+
+  it("fails deterministic media defects: missing required captions, unexpected silence, and overlapping scenes", () => {
+    const report = evaluateQuality(
+      { durationMs: 3_000, hasVideo: true, hasAudio: false, videoStreams: 1, audioStreams: 0 },
+      {
+        expectedDurationMs: 3_000,
+        expectedSegments: 2,
+        actualSegments: 2,
+        narration: "both",
+        captionsRequired: true,
+        hasCaptions: false,
+        sceneRanges: [
+          { narrationSegmentId: "one", startMs: 0, endMs: 2_000 },
+          { narrationSegmentId: "two", startMs: 1_500, endMs: 3_000 },
+        ],
+      },
+    );
+
+    expect(report.failures).toEqual([
+      "voice output has no audio stream",
+      "output is missing required captions sidecar",
+      "scene ranges overlap: one ends at 2000ms after two starts at 1500ms",
+    ]);
+  });
+
+  it("requires a deterministic H.264 delivery at the configured resolution", () => {
+    const report = evaluateQuality(
+      { durationMs: 3_000, hasVideo: true, hasAudio: false, videoCodec: "vp9", width: 1280, height: 720 },
+      { expectedDurationMs: 3_000, expectedSegments: 1, actualSegments: 1, narration: "silent", expectedVideoCodec: "h264", minimumWidth: 1920, minimumHeight: 1080 },
+    );
+
+    expect(report.failures).toEqual([
+      "output video codec vp9 does not match required h264",
+      "output width 1280 is below required 1920",
+      "output height 720 is below required 1080",
+    ]);
+  });
 });

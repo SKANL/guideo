@@ -21,6 +21,7 @@ import type { Brief } from "../../domain/models/brief.js";
 import { assertNarrationRefsResolve, ScriptSchema } from "../../domain/models/script.js";
 import { StoryboardSchema } from "../../domain/models/storyboard.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../domain/ports/script-gen.js";
+import type { UsageResult } from "../../domain/ports/usage-ledger.js";
 import { CONVERSATIONAL_NO_AI_TELLS_PROMPT } from "./calibration-prompt.js";
 
 const OutputSchema = z.object({ script: ScriptSchema, storyboard: StoryboardSchema });
@@ -49,6 +50,7 @@ export interface ClaudeAgentResultLike {
   readonly result?: string;
   readonly structured_output?: unknown;
   readonly errors?: string[];
+  readonly usage?: unknown;
 }
 
 export interface ClaudeAgentQueryOptions {
@@ -61,6 +63,8 @@ export type ClaudeAgentQueryFn = (params: {
   prompt: string;
   options?: ClaudeAgentQueryOptions;
 }) => AsyncIterable<ClaudeAgentResultLike>;
+export interface ClaudeUsagePricing { readonly inputTokenCostMicros: number; readonly outputTokenCostMicros: number; }
+function tokenUsage(value: unknown): { inputTokens: number; outputTokens: number } | undefined { if (!value || typeof value !== "object") return undefined; const usage = value as { input_tokens?: unknown; output_tokens?: unknown }; return typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number" ? { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens } : undefined; }
 
 function buildPrompt(brief: Brief, routes: FlowGraphRoutes): string {
   return [
@@ -74,15 +78,18 @@ export class ClaudeAgentScriptGen implements ScriptGen {
   private readonly queryFn: ClaudeAgentQueryFn;
   private readonly systemPrompt: string;
   private readonly model: string | undefined;
+  private readonly pricing: ClaudeUsagePricing;
 
   constructor(
     queryFn: ClaudeAgentQueryFn = query,
     systemPrompt: string = CONVERSATIONAL_NO_AI_TELLS_PROMPT,
     model?: string,
+    pricing: ClaudeUsagePricing = { inputTokenCostMicros: 0, outputTokenCostMicros: 0 },
   ) {
     this.queryFn = queryFn;
     this.systemPrompt = systemPrompt;
     this.model = model;
+    this.pricing = pricing;
   }
 
   async generate(
@@ -92,6 +99,25 @@ export class ClaudeAgentScriptGen implements ScriptGen {
     script: z.infer<typeof ScriptSchema>;
     storyboard: z.infer<typeof StoryboardSchema>;
   }> {
+    return (await this.generateWithUsageInternal(brief, routes)).result;
+  }
+
+  async generateWithUsage(
+    brief: Brief,
+    routes: FlowGraphRoutes,
+  ): Promise<{ result: { script: z.infer<typeof ScriptSchema>; storyboard: z.infer<typeof StoryboardSchema> }; usage: UsageResult }> {
+    if (!Number.isSafeInteger(this.pricing.inputTokenCostMicros) || !Number.isSafeInteger(this.pricing.outputTokenCostMicros) || this.pricing.inputTokenCostMicros < 0 || this.pricing.outputTokenCostMicros < 0 || (this.pricing.inputTokenCostMicros === 0 && this.pricing.outputTokenCostMicros === 0)) {
+      throw new Error("Claude provider-cost accounting requires configured token pricing");
+    }
+    const generated = await this.generateWithUsageInternal(brief, routes);
+    if (!generated.usage) throw new Error("Claude Agent SDK result carried no token usage");
+    return { result: generated.result, usage: generated.usage };
+  }
+
+  private async generateWithUsageInternal(
+    brief: Brief,
+    routes: FlowGraphRoutes,
+  ): Promise<{ result: { script: z.infer<typeof ScriptSchema>; storyboard: z.infer<typeof StoryboardSchema> }; usage?: UsageResult }> {
     const prompt = buildPrompt(brief, routes);
     const options: ClaudeAgentQueryOptions = {
       systemPrompt: this.systemPrompt,
@@ -101,6 +127,7 @@ export class ClaudeAgentScriptGen implements ScriptGen {
 
     let structuredOutput: unknown;
     let sawResult = false;
+    let providerUsage: unknown;
     for await (const message of this.queryFn({ prompt, options })) {
       if (message.type !== "result") continue;
       sawResult = true;
@@ -111,6 +138,7 @@ export class ClaudeAgentScriptGen implements ScriptGen {
         );
       }
       structuredOutput = message.structured_output;
+      providerUsage = message.usage;
     }
 
     if (!sawResult) {
@@ -128,6 +156,16 @@ export class ClaudeAgentScriptGen implements ScriptGen {
     const { script, storyboard } = parsed.data;
     assertNarrationRefsResolve(storyboard, script);
 
-    return { script, storyboard };
+    const measured = tokenUsage(providerUsage);
+    const usage = measured === undefined ? undefined : {
+      unit: "usd-micros" as const,
+      amount: measured.inputTokens * this.pricing.inputTokenCostMicros + measured.outputTokens * this.pricing.outputTokenCostMicros,
+      cache: "miss" as const,
+      provider: "anthropic",
+      ...(this.model === undefined ? {} : { model: this.model }),
+      inputTokens: measured.inputTokens,
+      outputTokens: measured.outputTokens,
+    };
+    return { result: { script, storyboard }, ...(usage === undefined ? {} : { usage }) };
   }
 }

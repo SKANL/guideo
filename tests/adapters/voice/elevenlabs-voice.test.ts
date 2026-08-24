@@ -66,6 +66,21 @@ describe("ElevenLabsVoice", () => {
     expect(audio.path.endsWith(".mp3")).toBe(true);
   });
 
+  it("reports the real character-priced provider cost as a cache miss", async () => {
+    const voice = new ElevenLabsVoice(fakeClient(async () => bytesToStream(new Uint8Array(0))), {
+      costPerCharacterMicros: 3,
+    });
+
+    const result = await voice.synthesizeWithUsage(segment);
+
+    expect(result.usage).toMatchObject({
+      unit: "usd-micros",
+      amount: segment.text.length * 3,
+      cache: "miss",
+      provider: "elevenlabs",
+    });
+  });
+
   it("propagates the configured voice/model/calibration knobs to the client call", async () => {
     const convert = vi.fn(async () => bytesToStream(new Uint8Array(0)));
     const voice = new ElevenLabsVoice(fakeClient(convert), {

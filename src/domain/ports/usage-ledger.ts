@@ -1,5 +1,28 @@
-export interface BudgetRequest { readonly operation: string; readonly estimated: number; }
-export interface Reservation { readonly id: string; readonly request: BudgetRequest; }
+/** Accounting uses integer USD micros throughout (1 USD = 1_000_000 micros). */
+export type UsageUnit = "usd-micros";
+export interface UsageEstimate { readonly unit: UsageUnit; readonly amount: number; }
+export interface UsageResult extends UsageEstimate {
+  readonly cache: "hit" | "miss";
+  readonly provider?: string;
+  readonly model?: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly characters?: number;
+}
+/** @deprecated Use UsageResult. Retained while callers migrate. */
 export interface UsageActual { readonly cost: number; readonly cached: boolean; }
-export interface UsageSnapshot { readonly spent: number; readonly reserved: number; }
-export interface UsageLedger { reserve(request: BudgetRequest): Promise<Reservation>; commit(id: string, actual: UsageActual): Promise<void>; release(id: string, reason: string): Promise<void>; snapshot(): Promise<UsageSnapshot>; }
+export interface BudgetRequest {
+  readonly operation: string;
+  readonly estimate?: UsageEstimate;
+  /** @deprecated Legacy amount in usd-micros. Use estimate.amount. */
+  readonly estimated?: number;
+}
+export interface Reservation { readonly id: string; readonly request: BudgetRequest; }
+export interface UsageSnapshot { readonly spent: number; readonly reserved: number; readonly unit?: UsageUnit; }
+export type UsageCommit = UsageResult | UsageActual;
+export interface UsageLedger {
+  reserve(request: BudgetRequest): Promise<Reservation>;
+  commit(id: string, actual: UsageCommit): Promise<void>;
+  release(id: string, reason: string): Promise<void>;
+  snapshot(): Promise<UsageSnapshot>;
+}

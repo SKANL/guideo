@@ -22,6 +22,8 @@ import type { SceneClip, SceneSplitter } from "../../../src/domain/ports/scene-s
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
 import type { MediaProbe, MediaProbeResult } from "../../../src/domain/ports/media-probe.js";
 import type { UsageActual, UsageLedger, UsageSnapshot, Reservation, BudgetRequest } from "../../../src/domain/ports/usage-ledger.js";
+import type { ArtifactManifest, ArtifactRef } from "../../../src/domain/artifacts/manifest.js";
+import type { ArtifactStore } from "../../../src/domain/ports/artifact-store.js";
 
 const script = parseScript({
   segments: [
@@ -117,6 +119,19 @@ class FakePlatformProfile implements PlatformProfile {
     await writeFile(params.outputPath, "video", "utf8");
     return { path: params.outputPath, aspectRatio: params.rawClip.aspectRatio };
   }
+}
+
+class TrackingArtifactStore implements ArtifactStore {
+  finalized: ArtifactManifest[] = [];
+  quarantined: string[] = [];
+  async lookup(): Promise<ArtifactRef | null> { return null; }
+  async finalize(input: AsyncIterable<Uint8Array>, manifest: Omit<ArtifactManifest, "sha256">): Promise<ArtifactRef> {
+    for await (const _chunk of input) { /* consume the final bytes */ }
+    const ref = { schema: manifest.schema, version: manifest.version, sha256: "finalized", inputs: manifest.inputs };
+    this.finalized.push({ ...manifest, ...ref });
+    return ref;
+  }
+  async quarantine(runId: string): Promise<void> { this.quarantined.push(runId); }
 }
 
 let scratchDir: string | undefined;
@@ -234,6 +249,32 @@ describe("runRender", () => {
     expect(profile.composeCalls).toBe(1);
     expect(profile.lastParams?.outputPath).not.toBe(paths.outputPath);
     expect(profile.lastParams?.outputPath).toMatch(/\.mp4$/);
+  });
+
+  it("finalizes the MP4 provenance before atomically exposing its required SRT sidecar", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const store = new TrackingArtifactStore();
+
+    const video = await runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile(), artifactStore: store }, true, paths, "silent");
+
+    expect(store.finalized).toHaveLength(1);
+    expect(store.finalized[0]).toMatchObject({ schema: "guideo.final-video", finalized: true });
+    expect(video.provenance?.sha256).toBe("finalized");
+    expect(await readFile(paths.outputPath, "utf8")).toBe("video");
+    expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
+  });
+
+  it("removes the promoted MP4 when captions promotion fails, preventing partial delivery", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    await mkdir(paths.captionsPath, { recursive: true });
+
+    await expect(runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile() }, true, paths, "silent")).rejects.toThrow();
+
+    await expect(stat(paths.outputPath)).rejects.toThrow();
   });
 
   it("requires an existing finalized approval manifest and never issues one", async () => {

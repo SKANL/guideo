@@ -9,6 +9,7 @@
 // and a SeededRandom — no real browser, deterministic output. Only when capture() actually runs and
 // no launcher was injected does this adapter lazily launch a real Chromium instance.
 
+import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "patchright";
@@ -25,6 +26,8 @@ import type {
 import type { ApprovedStoryboard, StoryboardStep } from "../../domain/models/storyboard.js";
 import type { Random } from "../../domain/ports/random.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
+import type { CaptureCheckpointStore } from "../../domain/ports/recording-engine.js";
+import { sha256 } from "../../domain/artifacts/canonical.js";
 import {
   LocatorResolutionError,
   orderedLocatorCandidates,
@@ -192,6 +195,7 @@ export class WebRecordingEngine implements RecordingEngine {
     loginConfig: Partial<LoginConfig> = {},
     now: () => number = () => Date.now(),
     quarantine?: CaptureQuarantine,
+    private readonly checkpoints?: CaptureCheckpointStore,
   ) {
     this.injectedLauncher = launcher;
     this.random = random;
@@ -206,8 +210,11 @@ export class WebRecordingEngine implements RecordingEngine {
     storyboard: ApprovedStoryboard,
     segmentDurationsMs: ReadonlyMap<string, number> = new Map(),
   ): Promise<RawClip> {
+    const runId = randomUUID();
+    const inputSha256 = sha256({ storyboard, segmentDurationsMs: [...segmentDurationsMs.entries()] });
+    const recovered = await this.checkpoints?.load(inputSha256);
+    if (recovered?.finalized) return recovered.finalized;
     const browser = await (this.injectedLauncher ?? (() => this.launchDefaultBrowser()))();
-    const runId = "capture";
 
     try {
       const videoDir = await mkdtemp(join(this.config.videoDir, "guideo-capture-"));
@@ -265,7 +272,9 @@ export class WebRecordingEngine implements RecordingEngine {
             const screenshot = await page.screenshot?.();
             if (typeof screenshot === "string" && screenshot) screenshots.push(screenshot);
             if (checkpoints.length < this.config.maxCheckpoints) {
-              checkpoints.push({ completedStepIndex: currentIndex, url: page.url() });
+              const checkpoint = { runId, inputSha256, completedStepIndex: currentIndex, url: page.url() };
+              checkpoints.push(checkpoint);
+              await this.checkpoints?.save(checkpoint);
               resume = { nextStepIndex: currentIndex + 1, url: page.url() };
             }
           },
@@ -283,7 +292,7 @@ export class WebRecordingEngine implements RecordingEngine {
       await context.close();
       const path = video ? await video.path() : join(videoDir, "capture.webm");
 
-      return {
+      const clip: RawClip = {
         path,
         durationMs: Math.round(elapsedMs),
         aspectRatio: "16:9",
@@ -292,6 +301,9 @@ export class WebRecordingEngine implements RecordingEngine {
         resolvedEffects,
         captureEvidence: { traces, screenshots, checkpoints, ...(resume ? { resume } : {}) },
       };
+      if (checkpoints.length === 0) await this.checkpoints?.save({ runId, inputSha256, completedStepIndex: -1, url: page.url() });
+      await this.checkpoints?.finalize(inputSha256, clip);
+      return clip;
     } catch (error) {
       if (error instanceof LocatorResolutionError || error instanceof CaptureRecoveryError) {
         await this.quarantine?.quarantine(runId, JSON.stringify(error.diagnostic));
@@ -579,14 +591,7 @@ export class WebRecordingEngine implements RecordingEngine {
   // selector shape (see ANCHOR_HREF_SELECTOR_RE).
   private async performClick(page: PatchrightCapturePage, selector: string): Promise<void> {
     const beforeUrl = page.url();
-    try {
-      await this.withStepRetry(() => page.click(visibleSelector(selector)), page);
-    } catch (err) {
-      console.warn(
-        `WebRecordingEngine: giving up clicking "${selector}" after retries — skipping this step. ${errorMessage(err)}`,
-      );
-      return;
-    }
+    await this.withStepRetry(() => page.click(visibleSelector(selector)), page);
     await this.maybeHealAnchorClick(page, selector, beforeUrl);
   }
 

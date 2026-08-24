@@ -59,6 +59,8 @@ export interface CaptureTrace {
 }
 
 export interface CaptureCheckpoint {
+  readonly runId: string;
+  readonly inputSha256: string;
   readonly completedStepIndex: number;
   readonly url: string;
 }

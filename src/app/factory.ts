@@ -28,6 +28,7 @@ import type { VoiceGen } from "../domain/ports/voice-gen.js";
 import type { MediaProbe } from "../domain/ports/media-probe.js";
 import type { UsageLedger } from "../domain/ports/usage-ledger.js";
 import { FileUsageLedger } from "../adapters/usage/file-usage-ledger.js";
+import { FileCaptureCheckpointStore } from "../adapters/recording/file-capture-checkpoint-store.js";
 import { FsArtifactStore } from "../adapters/storage/fs-artifact-store.js";
 import type { ArtifactStore } from "../domain/ports/artifact-store.js";
 import { join } from "node:path";
@@ -61,7 +62,7 @@ export function createContainer(overrides: Partial<Container> = {}): Container {
   return {
     target: overrides.target ?? new UrlCredsTarget(),
     scriptGen: overrides.scriptGen ?? new ClaudeAgentScriptGen(),
-    recordingEngine: overrides.recordingEngine ?? new WebRecordingEngine(),
+    recordingEngine: overrides.recordingEngine ?? new WebRecordingEngine(undefined, undefined, undefined, undefined, undefined, undefined, undefined, new FileCaptureCheckpointStore(join(process.cwd(), ".guideo", "capture-checkpoints"))),
     preRollTrimmer: overrides.preRollTrimmer ?? new FfmpegPreRollTrimmer(),
     privacyCutter: overrides.privacyCutter ?? new FfmpegPrivacyCutter(),
     effectsEngine: overrides.effectsEngine ?? new FfmpegEffectsEngine(),

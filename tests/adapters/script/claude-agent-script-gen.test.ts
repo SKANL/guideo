@@ -228,4 +228,27 @@ describe("ClaudeAgentScriptGen", () => {
 
     expect(calls[0]?.options?.model).toBe("claude-opus-4-8");
   });
+
+  it("returns token-priced actual usage from the terminal provider result", async () => {
+    const { fn } = fakeQueryFn(validOutput, {
+      usage: { input_tokens: 7, output_tokens: 11 },
+    });
+    const scriptGen = new ClaudeAgentScriptGen(
+      fn,
+      CONVERSATIONAL_NO_AI_TELLS_PROMPT,
+      undefined,
+      { inputTokenCostMicros: 2, outputTokenCostMicros: 3 },
+    );
+
+    const result = await scriptGen.generateWithUsage(brief, routes);
+
+    expect(result.usage).toMatchObject({
+      unit: "usd-micros",
+      amount: 47,
+      cache: "miss",
+      provider: "anthropic",
+      inputTokens: 7,
+      outputTokens: 11,
+    });
+  });
 });
