@@ -12,6 +12,7 @@ import type { SceneClip, SceneSplitter } from "../ports/scene-splitter.js";
 import type { VoiceGen } from "../ports/voice-gen.js";
 import type { UsageLedger } from "../ports/usage-ledger.js";
 import type { UsageEstimate, UsageResult } from "../ports/usage-ledger.js";
+import { deriveSceneArtifactKey, type SceneArtifactCache } from "./scene-artifact-cache.js";
 import { deriveSubtitles } from "./subtitles.js";
 
 // trimPreRoll (privacy/alignment fix, design doc section C, sub-project 5a): whether to cut the
@@ -42,6 +43,10 @@ export interface RenderPorts {
   readonly voiceGen: VoiceGen;
   readonly platformProfile: PlatformProfile;
   readonly usageLedger?: UsageLedger;
+  /** Optional process-local cache for immutable, per-scene effects artifacts. */
+  readonly sceneArtifactCache?: SceneArtifactCache;
+  /** Caller-supplied render profile included in the scene cache identity. */
+  readonly sceneRenderProfile?: unknown;
 }
 
 // RenderContext: the render state folded through the stage list, immutable-update style — every
@@ -193,10 +198,46 @@ class SceneSplitStage implements PipelineStage {
 // while `ctx.sceneClips` is what actually gets edited/replaced.
 class EffectsStage implements PipelineStage {
   readonly name = "effects";
-  constructor(private readonly effects: EffectsEngine) {}
+  constructor(
+    private readonly effects: EffectsEngine,
+    private readonly cache?: SceneArtifactCache,
+    private readonly renderProfile: unknown = null,
+  ) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
     const clip = requireClip(ctx, this.name);
-    const sceneClips = await this.effects.applyToScenes(clip, ctx.sceneClips, ctx.approved);
+    if (!this.cache) {
+      const sceneClips = await this.effects.applyToScenes(clip, ctx.sceneClips, ctx.approved);
+      return { ...ctx, sceneClips };
+    }
+
+    const captions = new Map(ctx.script.segments.map((segment) => [segment.id, {
+      text: segment.text,
+      startMs: segment.timing.startMs,
+      durationMs: segment.timing.durationMs,
+    }]));
+    const keys = ctx.sceneClips.map((scene) => deriveSceneArtifactKey({
+      scene,
+      effects: ctx.approved.steps
+        .filter((step) => step.narrationSegmentId === scene.narrationSegmentId)
+        .flatMap((step) => step.effects),
+      caption: captions.get(scene.narrationSegmentId) ?? null,
+      renderProfile: this.renderProfile,
+      intent: ctx.narration,
+    }));
+    const cached = keys.map((key) => this.cache?.get(key) ?? null);
+    const dirty = ctx.sceneClips.filter((_, index) => cached[index] === null);
+    const processed = dirty.length === 0
+      ? []
+      : await this.effects.applyToScenes(clip, dirty, ctx.approved);
+    let processedIndex = 0;
+    const sceneClips = ctx.sceneClips.map((scene, index) => {
+      const hit = cached[index];
+      if (hit) return hit.clip;
+      const clip = processed[processedIndex++];
+      if (!clip) throw new Error("effects engine returned fewer scene artifacts than requested");
+      this.cache?.put(keys[index]!, { ref: keys[index]!, clip });
+      return clip;
+    });
     return { ...ctx, sceneClips };
   }
 }
@@ -262,7 +303,7 @@ export function defaultRenderStages(ports: RenderPorts): PipelineStage[] {
     new TrimPreRollStage(ports.preRollTrimmer),
     new PrivacyCutStage(ports.privacyCutter),
     new SceneSplitStage(ports.sceneSplitter),
-    new EffectsStage(ports.effectsEngine),
+    new EffectsStage(ports.effectsEngine, ports.sceneArtifactCache, ports.sceneRenderProfile),
     new SceneAssembleStage(ports.sceneAssembler),
     new DeriveSubtitlesStage(),
     new ComposeStage(ports.platformProfile),
