@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { canonicalJson, sha256 } from "../../domain/artifacts/canonical.js";
 import { type ArtifactRef, artifactManifest } from "../../domain/artifacts/manifest.js";
 import {
+  type CapabilityProfile,
   deriveCapabilityProfile,
   isCapabilityProfile,
 } from "../../domain/models/capability-profile.js";
@@ -38,10 +39,13 @@ export async function runDiscover(
   paths: GuideoPaths = projectPaths({ project: "default" }),
   options: DiscoverOptions = {},
 ): Promise<{ graph: FlowGraph; path: string }> {
-  const fingerprint = container.target.getDiscoveryFingerprint
-    ? await container.target.getDiscoveryFingerprint()
-    : undefined;
-  const cached = await loadFinalizedCache(container.artifactStore, paths, fingerprint);
+  const probe = await probeFingerprint(container.target);
+  const cached = await loadFinalizedCache(
+    container.artifactStore,
+    paths,
+    probe.fingerprint,
+    probe.cacheSafe,
+  );
   if (cached) return { graph: cached, path: paths.flowGraphPath };
 
   const maxAttempts = options.maxAttempts ?? 2;
@@ -56,7 +60,7 @@ export async function runDiscover(
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const graph = await container.target.discover();
-        await persistDiscoveredGraph(container.artifactStore, paths, graph, fingerprint);
+        await persistDiscoveredGraph(container.artifactStore, paths, graph, probe.fingerprint);
         if (reservation)
           await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
         return { graph, path: paths.flowGraphPath };
@@ -85,8 +89,9 @@ async function loadFinalizedCache(
   store: ArtifactStore | undefined,
   paths: GuideoPaths,
   fingerprint?: Parameters<typeof deriveCapabilityProfile>[1],
+  cacheSafe = true,
 ): Promise<FlowGraph | null> {
-  if (!store) return null;
+  if (!store || !cacheSafe) return null;
   try {
     const [rawGraph, rawCache] = await Promise.all([
       readFile(paths.flowGraphPath, "utf8"),
@@ -131,8 +136,14 @@ async function persistDiscoveredGraph(
   // alone uses normalized bytes, so provider ordering cannot influence cache identity.
   await writeFile(paths.flowGraphPath, `${JSON.stringify(graph, null, 2)}\n`, "utf8");
   const normalizedGraph = normalizeFlowGraph(graph);
-  const profile = deriveCapabilityProfile(normalizedGraph, fingerprint);
+  const previousProfile = await readCapabilityProfile(paths);
+  const profile = deriveCapabilityProfile(normalizedGraph, fingerprint, previousProfile);
   await writeFile(paths.capabilityProfilePath, `${canonicalJson(profile)}\n`, "utf8");
+  await writeFile(
+    paths.discoveryObservationPlanPath,
+    `${canonicalJson({ targetSignature: profile.targetSignature, pages: profile.observationPlan })}\n`,
+    "utf8",
+  );
   if (!store) return;
   const graphSha256 = sha256(normalizedGraph);
   const profileSha256 = sha256(profile);
@@ -149,6 +160,29 @@ async function persistDiscoveredGraph(
     `${canonicalJson({ graphSha256, profileSha256, ref })}\n`,
     "utf8",
   );
+}
+
+async function probeFingerprint(target: Target): Promise<{
+  readonly fingerprint?: Parameters<typeof deriveCapabilityProfile>[1];
+  readonly cacheSafe: boolean;
+}> {
+  if (!target.getDiscoveryFingerprint) return { cacheSafe: true };
+  try {
+    return { fingerprint: await target.getDiscoveryFingerprint(), cacheSafe: true };
+  } catch {
+    // A stale cache is worse than one additional crawl: an unavailable live probe must never
+    // authorize reuse of a profile whose target state could no longer be verified.
+    return { cacheSafe: false };
+  }
+}
+
+async function readCapabilityProfile(paths: GuideoPaths): Promise<CapabilityProfile | undefined> {
+  try {
+    const profile = JSON.parse(await readFile(paths.capabilityProfilePath, "utf8")) as unknown;
+    return isCapabilityProfile(profile) ? profile : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function* bytesOf(value: string): AsyncIterable<Uint8Array> {

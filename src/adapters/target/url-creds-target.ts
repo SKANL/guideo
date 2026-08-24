@@ -320,6 +320,15 @@ export class UrlCredsTarget implements Target {
         // detection (e.g. requires a prior action) is a later upgrade.
         preconditions: ["authenticated"],
         selectors,
+        // Patchright intentionally does not expose an accessibility tree, so use a deterministic
+        // DOM snapshot (title + normalized nav locators) as state evidence. The capability profile
+        // preserves semantic selector hints without introducing a per-page LLM dependency.
+        locatorEvidence: {
+          candidates: Object.values(selectors).sort(),
+          urlFingerprint: sha256({ url: nodeId }),
+          buildFingerprint: sha256({ navItemSelector: this.config.navItemSelector }),
+          stateFingerprint: sha256({ title, selectors }),
+        },
       });
     }
 

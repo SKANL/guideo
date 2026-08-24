@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -95,7 +95,7 @@ describe("runDiscover", () => {
     );
 
     expect(profile.schema).toBe("target-capability-profile");
-    expect(profile.version).toBe(1);
+    expect(profile.version).toBe(2);
     expect(profile.loginSelectors).toMatchObject({ username: "#user", password: "#pass" });
     expect(profile.semanticLocators["https://example.test/settings"]).toEqual([
       "[data-save]",
@@ -107,6 +107,28 @@ describe("runDiscover", () => {
       build: "build-v1",
       content: "content-v1",
     });
+    expect(profile.targetSignature).toEqual(expect.any(String));
+    expect(profile.evidence["https://example.test/settings"]).toMatchObject({
+      label: "save",
+      locatorCandidates: ["[data-save]", "text=Save"],
+    });
+    expect(profile.states["https://example.test/settings"]).toBe("content-v1");
+    expect(profile.observationPlan).toEqual([
+      { route: "https://example.test/settings", reason: "new-route" },
+    ]);
+  });
+
+  it("derives byte-identical profiles and signatures regardless of provider ordering", () => {
+    const base: FlowGraph = {
+      nodes: [
+        { id: "https://example.test/b", feature: "b", useCase: "B", preconditions: [], selectors: { save: "button" } },
+        { id: "https://example.test/a", feature: "a", useCase: "A", preconditions: [], selectors: { menu: '[data-testid="menu"]' } },
+      ],
+      edges: [{ from: "https://example.test/a", to: "https://example.test/b", action: "click button" }],
+    };
+    const reordered: FlowGraph = { nodes: [...base.nodes].reverse(), edges: [...base.edges].reverse() };
+
+    expect(deriveCapabilityProfile(base)).toEqual(deriveCapabilityProfile(reordered));
   });
 
   it("calls Target.discover() and persists the returned FlowGraph as JSON at the CLI-owned path", async () => {
@@ -134,7 +156,7 @@ describe("runDiscover", () => {
     expect(written).toEqual(graph);
     expect(JSON.parse(await readFile(paths.capabilityProfilePath, "utf8"))).toMatchObject({
       schema: "target-capability-profile",
-      version: 1,
+      version: 2,
       graphSha256: expect.any(String),
     });
   });
@@ -200,6 +222,44 @@ describe("runDiscover", () => {
     await runDiscover({ target: changed, artifactStore: store }, paths);
 
     expect(calls).toBe(1);
+  });
+
+  it("plans observation only for routes whose state changed after partial invalidation", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    const firstGraph: FlowGraph = {
+      nodes: [
+        { id: "a", feature: "a", useCase: "A", preconditions: [], selectors: { open: "button" }, locatorEvidence: { candidates: ["button"], stateFingerprint: "a-1" } },
+        { id: "b", feature: "b", useCase: "B", preconditions: [], selectors: { save: "[data-testid=save]" }, locatorEvidence: { candidates: ["[data-testid=save]"], stateFingerprint: "b-1" } },
+      ],
+      edges: [{ from: "a", to: "b", action: "click [data-testid=save]" }],
+    };
+    const secondGraph: FlowGraph = { ...firstGraph, nodes: [firstGraph.nodes[0]!, { ...firstGraph.nodes[1]!, locatorEvidence: { candidates: ["[data-testid=save]"], stateFingerprint: "b-2" } }] };
+    const store = new MemoryArtifactStore();
+    await runDiscover({ target: { discover: async () => firstGraph, getDiscoveryFingerprint: async () => ({ content: "v1" }) }, artifactStore: store }, paths);
+    await runDiscover({ target: { discover: async () => secondGraph, getDiscoveryFingerprint: async () => ({ content: "v2" }) }, artifactStore: store }, paths);
+
+    expect(JSON.parse(await readFile(paths.discoveryObservationPlanPath, "utf8"))).toMatchObject({
+      targetSignature: expect.any(String),
+      pages: [{ route: "b", reason: "state-changed" }],
+    });
+  });
+
+  it("fails safe when a target fingerprint probe is unavailable instead of reusing an unverifiable cache", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    const graph: FlowGraph = { nodes: [{ id: "n1", feature: "invite", useCase: "Invite", preconditions: [], selectors: {} }], edges: [] };
+    const store = new MemoryArtifactStore();
+    await runDiscover({ target: { discover: async () => graph, getDiscoveryFingerprint: async () => ({ content: "v1" }) }, artifactStore: store }, paths);
+    let discoverCalls = 0;
+    await runDiscover({
+      target: {
+        discover: async () => { discoverCalls += 1; return graph; },
+        getDiscoveryFingerprint: async () => { throw new Error("probe unavailable"); },
+      },
+      artifactStore: store,
+    }, paths);
+    expect(discoverCalls).toBe(1);
   });
 
   it("does not reuse a graph when the persisted capability profile is malformed", async () => {
