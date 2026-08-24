@@ -27,6 +27,17 @@ export const StepSchema = z
     // editing storyboard.json; ScriptGen may also propose it for obviously-sensitive scenes.
     // Defaults to "show" so storyboards authored before this field existed still parse unchanged.
     visibility: z.enum(["show", "private"]).default("show"),
+    evidence: z.object({
+      expectedPreState: z.string().min(1).optional(),
+      expectedPostState: z.string().min(1).optional(),
+      reference: z.string().min(1).optional(),
+      // Discovery can provide several independently observed locators. Capture resolves these
+      // deterministically and refuses ambiguous targets rather than clicking an arbitrary match.
+      locatorCandidates: z.array(z.string().min(1)).min(1).optional(),
+      // The page URL observed during discovery. A mismatch means the reviewed target state has
+      // drifted and must be re-discovered instead of being executed blindly.
+      urlFingerprint: z.string().min(1).optional(),
+    }).optional(),
   })
   .superRefine((step, ctx) => {
     if (SELECTOR_REQUIRED_ACTIONS.has(step.action) && !step.selector) {

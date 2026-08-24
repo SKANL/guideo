@@ -46,6 +46,28 @@ export interface RawClip {
   // trim-preroll/cut-private rebase; the output stays 1280x720 throughout so a resolved region
   // stays valid across those rebases.
   readonly resolvedEffects?: readonly ResolvedEffect[];
+  // Capture recovery evidence is intentionally bounded. It supports a diagnostic/resume handoff
+  // without persisting unbounded browser logs or screenshots for long storyboards.
+  readonly captureEvidence?: CaptureEvidence;
+  readonly provenance?: { readonly schema: string; readonly version: number; readonly sha256: string };
+}
+
+export interface CaptureTrace {
+  readonly stepIndex: number;
+  readonly action: string;
+  readonly url: string;
+}
+
+export interface CaptureCheckpoint {
+  readonly completedStepIndex: number;
+  readonly url: string;
+}
+
+export interface CaptureEvidence {
+  readonly traces: readonly CaptureTrace[];
+  readonly screenshots: readonly string[];
+  readonly checkpoints: readonly CaptureCheckpoint[];
+  readonly resume?: { readonly nextStepIndex: number; readonly url: string };
 }
 
 export interface EffectRegion {
@@ -76,6 +98,7 @@ export interface Subtitle {
 export interface FinalVideo {
   readonly path: string;
   readonly aspectRatio: "16:9";
+  readonly provenance?: { readonly schema: string; readonly version: number; readonly sha256: string };
 }
 
 // Deferred seam (non-goal): engagement metrics feedback loop, referenced-only per spec's

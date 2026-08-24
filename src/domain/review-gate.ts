@@ -1,19 +1,6 @@
+import { artifactManifest, type ArtifactManifest } from "./artifacts/manifest.js";
 import type { ApprovedStoryboard, Storyboard } from "./models/storyboard.js";
-
-export type ReviewDecision =
-  | { readonly kind: "approved" }
-  | { readonly kind: "rejected"; readonly reason?: string };
-
-// This module is the ONLY place in the domain permitted to mint an ApprovedStoryboard — the
-// brand cast lives here and nowhere else (see models/storyboard.ts's unexported brand symbol).
-// Adapters (e.g. CliReviewGate, Phase 4) capture the human decision and call this function; they
-// never construct ApprovedStoryboard themselves. Rejection returns null: no mint, pipeline halts.
-export function review(
-  storyboard: Storyboard,
-  decision: ReviewDecision,
-): ApprovedStoryboard | null {
-  if (decision.kind === "approved") {
-    return storyboard as ApprovedStoryboard;
-  }
-  return null;
-}
+import type { ApprovalInputs } from "./artifacts/manifest.js";
+export type ReviewDecision = { readonly kind: "approved" } | { readonly kind: "rejected"; readonly reason?: string };
+export function review(storyboard: Storyboard, decision: ReviewDecision): ApprovedStoryboard | null { return decision.kind === "approved" ? storyboard as ApprovedStoryboard : null; }
+export function reviewWithManifest(storyboard: Storyboard, manifest: ArtifactManifest, actual: ApprovalInputs): ApprovedStoryboard | null { const expected = artifactManifest("approval", 2, actual); if (manifest.schema !== "approval" || manifest.version !== 2 || manifest.sha256 !== expected.sha256 || Object.keys(actual).some((key) => manifest.inputs[key] !== actual[key as keyof ApprovalInputs])) throw new Error("approval manifest hash mismatch"); return review(storyboard, { kind: "approved" }); }

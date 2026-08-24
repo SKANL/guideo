@@ -89,6 +89,10 @@ function fakeCaptureHarness(
     async (_selector: string): Promise<PatchrightCaptureElementHandle | null> =>
       fakeElement({ x: 100, y: 100, width: 50, height: 20 }),
   );
+  const $$ = vi.fn(
+    async (_selector: string): Promise<PatchrightCaptureElementHandle[]> =>
+      [fakeElement({ x: 100, y: 100, width: 50, height: 20 })],
+  );
   const closePage = vi.fn(async () => {});
 
   const page: PatchrightCapturePage = {
@@ -100,8 +104,8 @@ function fakeCaptureHarness(
     goBack: vi.fn(async () => {}),
     url: () => currentUrl,
     title: async () => "",
-    $$: async () => [],
     $,
+    $$,
     mouse: { move },
     keyboard: { type, press },
     waitForTimeout,
@@ -135,6 +139,8 @@ function fakeCaptureHarness(
     press,
     waitForTimeout,
     $,
+    $$,
+    page,
     newContext,
     contextClose,
     browserClose,
@@ -812,6 +818,82 @@ describe("WebRecordingEngine", () => {
 
       // Only the login goto — no fallback goto for the click.
       expect(harness.goto).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("semantic locator evidence and capture recovery", () => {
+    it("fails closed and quarantines capture on an ambiguous semantic locator", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$$.mockResolvedValueOnce([
+        fakeElement({ x: 1, y: 1, width: 10, height: 10 }),
+        fakeElement({ x: 2, y: 2, width: 10, height: 10 }),
+      ]);
+      const quarantines: string[] = [];
+      const storyboard = parseStoryboard({ steps: [{
+        action: "click", selector: "#legacy", narrationSegmentId: "seg-1",
+        evidence: { locatorCandidates: ["[data-testid=save]"] },
+      }] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1), {}, {}, {}, undefined, {
+        quarantine: async (_runId, reason) => { quarantines.push(reason); },
+      });
+      await expect(engine.capture(approved)).rejects.toMatchObject({
+        diagnostic: expect.objectContaining({ kind: "ambiguous" }),
+      });
+      expect(quarantines).toHaveLength(1);
+      expect(harness.click).toHaveBeenCalledTimes(1); // login only
+    });
+
+    it("rejects a stale URL fingerprint before executing the required step", async () => {
+      const harness = fakeCaptureHarness();
+      const storyboard = parseStoryboard({ steps: [{
+        action: "click", selector: "#save", narrationSegmentId: "seg-1",
+        evidence: { urlFingerprint: "stale" },
+      }] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+
+      await expect(engine.capture(approved)).rejects.toMatchObject({
+        diagnostic: expect.objectContaining({ kind: "stale-fingerprint", phase: "precondition" }),
+      });
+      expect(harness.click).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a required step whose reviewed postcondition does not hold", async () => {
+      const harness = fakeCaptureHarness();
+      const storyboard = parseStoryboard({ steps: [{
+        action: "click", selector: "#save", narrationSegmentId: "seg-1",
+        evidence: { expectedPostState: "https://target.example.com/saved" },
+      }] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+      await expect(engine.capture(approved)).rejects.toMatchObject({
+        diagnostic: expect.objectContaining({ kind: "postcondition", phase: "postcondition" }),
+      });
+    });
+
+    it("records bounded checkpoints, traces, and screenshot evidence through the fake page", async () => {
+      const harness = fakeCaptureHarness();
+      const screenshot = vi.fn(async () => "/tmp/step.png");
+      (harness.page as PatchrightCapturePage & { screenshot?: () => Promise<string> }).screenshot = screenshot;
+      const storyboard = parseStoryboard({ steps: [
+        { action: "pause", narrationSegmentId: "seg-1" },
+        { action: "pause", narrationSegmentId: "seg-2" },
+      ] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1), {}, { maxCheckpoints: 1 });
+      const clip = await engine.capture(approved);
+
+      expect(clip.captureEvidence?.checkpoints).toHaveLength(1);
+      expect(clip.captureEvidence?.resume?.nextStepIndex).toBe(1);
+      expect(clip.captureEvidence?.traces).toHaveLength(2);
+      expect(clip.captureEvidence?.screenshots).toEqual(["/tmp/step.png", "/tmp/step.png"]);
     });
   });
 

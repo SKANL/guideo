@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { sha256 } from "../../domain/artifacts/canonical.js";
+import { approvalManifest } from "../../domain/artifacts/manifest.js";
 import type { Brief } from "../../domain/models/brief.js";
 import { type FlowGraph, parseFlowGraph } from "../../domain/models/flow-graph.js";
 import type { Script } from "../../domain/models/script.js";
@@ -8,6 +10,7 @@ import { applyDirectorDefaults, type DirectorConfig } from "../../domain/pipelin
 import { plan } from "../../domain/pipeline/planning.js";
 import type { ScriptGen } from "../../domain/ports/script-gen.js";
 import type { Target } from "../../domain/ports/target.js";
+import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
 import { type GuideoPaths, projectPaths } from "../paths.js";
 
 // Loads the flow graph that `guideo discover` persisted. plan does NOT re-run discovery — the
@@ -32,7 +35,7 @@ function loadPersistedFlowGraph(flowGraphPath: string): FlowGraph {
 // it's written for the REVIEW gate — `enabled: false` turns it off entirely (default ON); the rest
 // merges over DEFAULT_DIRECTOR_CONFIG.
 export async function runPlan(
-  container: { readonly scriptGen: ScriptGen },
+  container: { readonly scriptGen: ScriptGen; readonly usageLedger?: UsageLedger },
   brief: Brief,
   paths: GuideoPaths = projectPaths({ project: "default" }),
   directorOptions: { readonly enabled?: boolean } & Partial<DirectorConfig> = {},
@@ -40,15 +43,24 @@ export async function runPlan(
   const graph = loadPersistedFlowGraph(paths.flowGraphPath);
   // A cached-graph Target: plan() consumes the already-discovered graph, no live browser here.
   const cachedTarget: Target = { discover: async () => graph };
-  const { script, storyboard: rawStoryboard } = await plan(
-    cachedTarget,
-    brief,
-    container.scriptGen,
-  );
+  const reservation = await container.usageLedger?.reserve({ operation: "plan", estimated: 1 });
+  let planned: { script: Script; storyboard: Storyboard };
+  try {
+    planned = await plan(cachedTarget, brief, container.scriptGen);
+    if (reservation) await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
+  } catch (error) {
+    if (reservation) await container.usageLedger?.release(reservation.id, "plan failed");
+    throw error;
+  }
+  const { script, storyboard: rawStoryboard } = planned;
   const { enabled = true, ...directorConfig } = directorOptions;
   const storyboard = enabled ? applyDirectorDefaults(rawStoryboard, directorConfig) : rawStoryboard;
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.scriptPath, JSON.stringify(script, null, 2), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard, null, 2), "utf8");
+  await writeFile(paths.approvalManifestPath, JSON.stringify({
+    ...approvalManifest({ flowGraph: sha256(graph), script: sha256(script), storyboard: sha256(storyboard), policy: sha256({ version: 2 }) }),
+    finalized: true,
+  }), "utf8");
   return { script, storyboard };
 }

@@ -10,6 +10,7 @@ import type { RecordingEngine } from "../ports/recording-engine.js";
 import type { SceneAssembler } from "../ports/scene-assembler.js";
 import type { SceneClip, SceneSplitter } from "../ports/scene-splitter.js";
 import type { VoiceGen } from "../ports/voice-gen.js";
+import type { UsageLedger } from "../ports/usage-ledger.js";
 import { deriveSubtitles } from "./subtitles.js";
 
 // trimPreRoll (privacy/alignment fix, design doc section C, sub-project 5a): whether to cut the
@@ -39,6 +40,7 @@ export interface RenderPorts {
   readonly sceneAssembler: SceneAssembler;
   readonly voiceGen: VoiceGen;
   readonly platformProfile: PlatformProfile;
+  readonly usageLedger?: UsageLedger;
 }
 
 // RenderContext: the render state folded through the stage list, immutable-update style — every
@@ -98,9 +100,9 @@ function requireClip(ctx: RenderContext, stageName: string): RawClip {
 // identically regardless of where the durations came from.
 class SynthesizeVoiceStage implements PipelineStage {
   readonly name = "synthesize-voice";
-  constructor(private readonly voice: VoiceGen) {}
+  constructor(private readonly voice: VoiceGen, private readonly ledger?: UsageLedger) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
-    if (ctx.narration === "subtitles") {
+    if (ctx.narration === "subtitles" || ctx.narration === "silent") {
       const segmentDurationsMs = new Map(
         ctx.script.segments.map((segment) => [segment.id, segment.timing.durationMs]),
       );
@@ -108,7 +110,15 @@ class SynthesizeVoiceStage implements PipelineStage {
     }
     const audioTracks: Audio[] = [];
     for (const segment of ctx.script.segments) {
-      audioTracks.push(await this.voice.synthesize(segment));
+      const reservation = this.ledger ? await this.ledger.reserve({ operation: "voice", estimated: segment.timing.durationMs }) : null;
+      try {
+        const audio = await this.voice.synthesize(segment);
+        if (reservation) await this.ledger!.commit(reservation.id, { cost: audio.durationMs, cached: false });
+        audioTracks.push(audio);
+      } catch (error) {
+        if (reservation) await this.ledger!.release(reservation.id, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
     }
     const segmentDurationsMs = new Map(
       audioTracks.map((audio) => [audio.segmentId, audio.durationMs]),
@@ -208,7 +218,7 @@ class SceneAssembleStage implements PipelineStage {
 class DeriveSubtitlesStage implements PipelineStage {
   readonly name = "derive-subtitles";
   async run(ctx: RenderContext): Promise<RenderContext> {
-    if (ctx.narration === "voice") return ctx;
+    if (ctx.narration === "voice" || ctx.narration === "silent") return ctx;
     const clip = requireClip(ctx, this.name);
     return { ...ctx, subtitles: deriveSubtitles(ctx.script, clip.scenes) };
   }
@@ -239,7 +249,7 @@ class ComposeStage implements PipelineStage {
 // one, or write your own from scratch) and pass it as render()'s last argument.
 export function defaultRenderStages(ports: RenderPorts): PipelineStage[] {
   return [
-    new SynthesizeVoiceStage(ports.voiceGen),
+    new SynthesizeVoiceStage(ports.voiceGen, ports.usageLedger),
     new CaptureStage(ports.recordingEngine),
     new TrimPreRollStage(ports.preRollTrimmer),
     new PrivacyCutStage(ports.privacyCutter),

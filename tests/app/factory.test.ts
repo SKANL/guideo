@@ -33,7 +33,21 @@ describe("createContainer", () => {
     expect(container.effectsEngine).toBeDefined();
     expect(container.voiceGen).toBeDefined();
     expect(container.platformProfile).toBeDefined();
+    expect(container.artifactStore).toBeDefined();
+    expect(container.usageLedger).toBeDefined();
     // Overriding only one port must leave the other four as real (non-fake) adapters.
     expect(container.target).not.toBe(new FakeTarget());
+  });
+
+  it("uses a finite configurable production usage limit", async () => {
+    const previous = process.env.GUIDEO_USAGE_LIMIT;
+    process.env.GUIDEO_USAGE_LIMIT = "1";
+    try {
+      const container = createContainer();
+      await expect(container.usageLedger!.reserve({ operation: "discover", estimated: 2 })).rejects.toThrow("budget");
+    } finally {
+      if (previous === undefined) delete process.env.GUIDEO_USAGE_LIMIT;
+      else process.env.GUIDEO_USAGE_LIMIT = previous;
+    }
   });
 });

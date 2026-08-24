@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FlowGraphSchema,
+  normalizeFlowGraph,
   parseFlowGraph,
   queryNodesByFeature,
 } from "../../../src/domain/models/flow-graph.js";
@@ -55,6 +56,33 @@ describe("FlowGraphSchema", () => {
 
   it("rejects non-array nodes", () => {
     expect(() => parseFlowGraph({ nodes: "not-an-array", edges: [] })).toThrow();
+  });
+});
+
+describe("FlowGraph evidence normalization", () => {
+  it("creates stable, deduplicated locator evidence while accepting legacy graphs", () => {
+    const legacy = {
+      nodes: [{ id: "https://app.test/invite", feature: "invite", useCase: "Invite", preconditions: ["authenticated"], selectors: { first: "#invite", second: "#invite", edit: "[data-testid=invite]" } }],
+      edges: [],
+    };
+
+    const normalized = normalizeFlowGraph(legacy);
+    const node = normalized.nodes[0];
+    expect(node?.locatorEvidence?.candidates).toEqual(["#invite", "[data-testid=invite]"]);
+    expect(node?.locatorEvidence?.urlFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(node?.locatorEvidence?.buildFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(parseFlowGraph(legacy)).toEqual(normalized);
+  });
+
+  it("normalizes equivalent evidence deterministically without duplicating edges", () => {
+    const input = {
+      nodes: [{ id: "b", feature: "b", useCase: "B", preconditions: [], selectors: { z: "#z", a: "#a" }, locatorEvidence: { candidates: ["#z", "#a", "#z"] } }, { id: "a", feature: "a", useCase: "A", preconditions: [], selectors: {} }],
+      edges: [{ from: "a", to: "b", action: "go" }, { from: "a", to: "b", action: "go" }],
+    };
+    const normalized = normalizeFlowGraph(input);
+    expect(normalized.nodes.map((node) => node.id)).toEqual(["a", "b"]);
+    expect(normalized.nodes[1]?.locatorEvidence?.candidates).toEqual(["#a", "#z"]);
+    expect(normalized.edges).toEqual([{ from: "a", to: "b", action: "go" }]);
   });
 });
 

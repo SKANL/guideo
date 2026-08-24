@@ -177,3 +177,15 @@ describe("render() narration modes", () => {
     expect(profile.lastParams?.narration).toBe("both");
   });
 });
+
+  it('mode "silent": never synthesizes voice, emits no embedded captions, and still has deterministic scene timing', async () => {
+    const { ports, voice, profile, engine } = makePorts();
+
+    await render(ports, makeApproved(), script, "final.mp4", { narration: "silent" });
+
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(engine.lastSegmentDurationsMs?.get("seg-1")).toBe(4200);
+    expect(profile.lastParams?.audioTracks).toEqual([]);
+    expect(profile.lastParams?.subtitles).toEqual([]);
+    expect(profile.lastParams?.narration).toBe("silent");
+  });

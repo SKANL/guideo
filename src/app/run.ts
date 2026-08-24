@@ -15,7 +15,7 @@ Usage:
   guideo discover [--project <name>]              Discover the target app, write its flow graph
   guideo plan --brief "<idea>" [--platform youtube] [--project <name>]
                                                    Plan a script + storyboard, then STOP for review
-  guideo render --approve [--project <name>] [--narration <voice|subtitles|both>]
+  guideo render --approve [--project <name>] [--narration <voice|subtitles|both|silent>]
                                                    Render the last-planned, approved storyboard
   guideo --help                                   Show this help
 
@@ -23,9 +23,9 @@ Review gate: "plan" never captures the screen or synthesizes voice. Review the p
 storyboard (and the files written under .guideo/), then run "guideo render --approve" only once
 you approve. "guideo render" without --approve always refuses — no capture or voice synthesis.
 
-Narration modes (--narration, default "both"): "voice" synthesizes narration audio and attaches
-no subtitles; "subtitles" skips voice synthesis entirely (no TTS spend) and burns subtitles into a
-silent video; "both" does voice audio + soft (toggleable) subtitles, same as pre-existing behavior.
+Narration modes (--narration, default "both"): "voice" synthesizes narration audio; "subtitles"
+skips voice synthesis entirely (no TTS spend); "both" does voice audio + subtitles. Every mode
+writes a captions.srt sidecar for accessibility; silent remains available for voice-free output.
 
 Projects: every command operates on one project's artifacts, stored under
 .guideo/projects/<project>/. --project defaults to a slug of GUIDEO_TARGET_URL's host (or

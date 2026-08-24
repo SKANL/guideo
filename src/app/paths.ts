@@ -10,8 +10,11 @@ import { join } from "node:path";
 export interface GuideoPaths {
   readonly guideoDir: string;
   readonly flowGraphPath: string;
+  readonly flowGraphCachePath: string;
   readonly scriptPath: string;
   readonly storyboardPath: string;
+  readonly approvalManifestPath: string;
+  readonly captionsPath: string;
   // STABLE — fixes the previous "final video written to an OS temp dir" bug (compose adapter no
   // longer picks its own path).
   readonly outputPath: string;
@@ -31,8 +34,11 @@ export function projectPaths(opts: {
   return {
     guideoDir,
     flowGraphPath: join(guideoDir, "flow-graph.json"),
+    flowGraphCachePath: join(guideoDir, "flow-graph-cache.json"),
     scriptPath: join(guideoDir, "script.json"),
     storyboardPath: join(guideoDir, "storyboard.json"),
+    approvalManifestPath: join(guideoDir, "approval-manifest.json"),
+    captionsPath: join(guideoDir, "captions.srt"),
     outputPath: join(guideoDir, "output", `${platform}.mp4`),
   };
 }

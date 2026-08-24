@@ -14,6 +14,9 @@ import { join } from "node:path";
 import { chromium } from "patchright";
 import type { Effect } from "../../domain/models/effect.js";
 import type {
+  CaptureCheckpoint,
+  CaptureEvidence,
+  CaptureTrace,
   EffectRegion,
   RawClip,
   ResolvedEffect,
@@ -22,6 +25,11 @@ import type {
 import type { ApprovedStoryboard, StoryboardStep } from "../../domain/models/storyboard.js";
 import type { Random } from "../../domain/ports/random.js";
 import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
+import {
+  LocatorResolutionError,
+  orderedLocatorCandidates,
+  resolveExactlyOne,
+} from "../../domain/models/locator-resolution.js";
 import { regionFromParams } from "../effects/effect-filter-builders.js";
 import type { LoginConfig } from "../target/login.js";
 import {
@@ -62,11 +70,30 @@ export interface PatchrightVideo {
 // bounding box, hover, mouse/keyboard, explicit pacing waits, and the recorded video handle.
 export interface PatchrightCapturePage extends PatchrightPage {
   $(selector: string): Promise<PatchrightCaptureElementHandle | null>;
+  $$(selector: string): Promise<PatchrightCaptureElementHandle[]>;
   hover(selector: string): Promise<void>;
   mouse: PatchrightMouse;
   keyboard: PatchrightKeyboard;
   waitForTimeout(ms: number): Promise<void>;
   video(): PatchrightVideo | null;
+  screenshot?(): Promise<unknown>;
+}
+
+export interface CaptureQuarantine {
+  quarantine(runId: string, reason: string): Promise<void>;
+}
+
+export class CaptureRecoveryError extends Error {
+  constructor(readonly diagnostic: {
+    readonly kind: "stale-fingerprint" | "postcondition";
+    readonly phase: "precondition" | "postcondition";
+    readonly stepIndex: number;
+    readonly expected: string;
+    readonly actual: string;
+  }) {
+    super(`capture ${diagnostic.phase} ${diagnostic.kind} at step ${diagnostic.stepIndex}`);
+    this.name = "CaptureRecoveryError";
+  }
 }
 
 export interface PatchrightCaptureContext {
@@ -152,6 +179,7 @@ export class WebRecordingEngine implements RecordingEngine {
   private readonly loginConfig: LoginConfig;
 
   private readonly now: () => number;
+  private readonly quarantine: CaptureQuarantine | undefined;
 
   constructor(
     launcher?: CaptureBrowserLauncher,
@@ -160,6 +188,7 @@ export class WebRecordingEngine implements RecordingEngine {
     config: Partial<CaptureConfig> = {},
     loginConfig: Partial<LoginConfig> = {},
     now: () => number = () => Date.now(),
+    quarantine?: CaptureQuarantine,
   ) {
     this.injectedLauncher = launcher;
     this.random = random;
@@ -167,6 +196,7 @@ export class WebRecordingEngine implements RecordingEngine {
     this.config = { ...DEFAULT_CAPTURE_CONFIG, ...config };
     this.loginConfig = { ...DEFAULT_LOGIN_CONFIG, ...loginConfig };
     this.now = now;
+    this.quarantine = quarantine;
   }
 
   async capture(
@@ -174,6 +204,7 @@ export class WebRecordingEngine implements RecordingEngine {
     segmentDurationsMs: ReadonlyMap<string, number> = new Map(),
   ): Promise<RawClip> {
     const browser = await (this.injectedLauncher ?? (() => this.launchDefaultBrowser()))();
+    const runId = "capture";
 
     try {
       const videoDir = await mkdtemp(join(this.config.videoDir, "guideo-capture-"));
@@ -209,6 +240,11 @@ export class WebRecordingEngine implements RecordingEngine {
       // storyboard order across scenes so its positional index lines up with
       // buildSceneEffectsGraph's own iteration (see effects-graph.ts).
       const resolvedEffects: ResolvedEffect[] = [];
+      const traces: CaptureTrace[] = [];
+      const screenshots: string[] = [];
+      const checkpoints: CaptureCheckpoint[] = [];
+      let resume: CaptureEvidence["resume"];
+      let stepIndex = 0;
 
       for (const scene of groupIntoScenes(storyboard.steps)) {
         const startMs = Math.round(elapsedMs);
@@ -217,6 +253,17 @@ export class WebRecordingEngine implements RecordingEngine {
           scene,
           mousePosition,
           segmentDurationsMs.get(scene.narrationSegmentId),
+          stepIndex,
+          async (step) => {
+            const currentIndex = stepIndex++;
+            traces.push({ stepIndex: currentIndex, action: step.action, url: page.url() });
+            const screenshot = await page.screenshot?.();
+            if (typeof screenshot === "string" && screenshot) screenshots.push(screenshot);
+            if (checkpoints.length < this.config.maxCheckpoints) {
+              checkpoints.push({ completedStepIndex: currentIndex, url: page.url() });
+              resume = { nextStepIndex: currentIndex + 1, url: page.url() };
+            }
+          },
         );
         mousePosition = result.mousePosition;
         elapsedMs += result.elapsedMs;
@@ -238,7 +285,13 @@ export class WebRecordingEngine implements RecordingEngine {
         scenes,
         preRollMs,
         resolvedEffects,
+        captureEvidence: { traces, screenshots, checkpoints, ...(resume ? { resume } : {}) },
       };
+    } catch (error) {
+      if (error instanceof LocatorResolutionError || error instanceof CaptureRecoveryError) {
+        await this.quarantine?.quarantine(runId, JSON.stringify(error.diagnostic));
+      }
+      throw error;
     } finally {
       await browser.close();
     }
@@ -253,17 +306,23 @@ export class WebRecordingEngine implements RecordingEngine {
     scene: CaptureScene,
     mousePositionIn: Point,
     targetMs: number | undefined,
+    startStepIndex: number,
+    onStepCompleted: (step: StoryboardStep) => Promise<void>,
   ): Promise<{ mousePosition: Point; elapsedMs: number; resolvedEffects: ResolvedEffect[] }> {
     let mousePosition = mousePositionIn;
     let elapsedMs = 0;
     const resolvedEffects: ResolvedEffect[] = [];
 
-    for (const step of scene.steps) {
+    for (const [sceneStepIndex, step] of scene.steps.entries()) {
       const pauseMs = naturalPauseMs(this.random, this.humanFeel);
       await page.waitForTimeout(pauseMs);
       elapsedMs += pauseMs;
 
-      const result = await this.runStep(page, step, mousePosition);
+      const stepIndex = startStepIndex + sceneStepIndex;
+      const preparedStep = await this.prepareRequiredStep(page, step, stepIndex);
+      const result = await this.runStep(page, preparedStep, mousePosition);
+      this.verifyPostcondition(page, preparedStep, stepIndex);
+      await onStepCompleted(preparedStep);
       mousePosition = result.mousePosition;
       elapsedMs += result.elapsedMs;
 
@@ -292,6 +351,37 @@ export class WebRecordingEngine implements RecordingEngine {
     }
 
     return { mousePosition, elapsedMs, resolvedEffects };
+  }
+
+  private async prepareRequiredStep(
+    page: PatchrightCapturePage,
+    step: StoryboardStep,
+    stepIndex: number,
+  ): Promise<StoryboardStep> {
+    const evidence = step.evidence;
+    if (evidence?.urlFingerprint && evidence.urlFingerprint !== page.url()) {
+      throw new CaptureRecoveryError({
+        kind: "stale-fingerprint", phase: "precondition", stepIndex,
+        expected: evidence.urlFingerprint, actual: page.url(),
+      });
+    }
+    if (!step.selector || !evidence?.locatorCandidates?.length) return step;
+    const candidates = orderedLocatorCandidates(evidence.locatorCandidates, step.selector);
+    const matches = await Promise.all(candidates.map(async (selector) => ({
+      selector,
+      matches: await this.withStepRetry(() => page.$$(visibleSelector(selector)), page),
+    })));
+    const resolved = resolveExactlyOne(matches);
+    return { ...step, selector: resolved.selector };
+  }
+
+  private verifyPostcondition(page: PatchrightCapturePage, step: StoryboardStep, stepIndex: number): void {
+    const expected = step.evidence?.expectedPostState;
+    if (expected && page.url() !== expected) {
+      throw new CaptureRecoveryError({
+        kind: "postcondition", phase: "postcondition", stepIndex, expected, actual: page.url(),
+      });
+    }
   }
 
   // Effect targeting (effects-overhaul Phase A): a `selector` in the effect's own params (NOT the

@@ -1,10 +1,12 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ElevenLabsVoice } from "../../../src/adapters/voice/elevenlabs-voice.js";
 import { runRender } from "../../../src/app/commands/render.js";
 import { projectPaths } from "../../../src/app/paths.js";
+import { approvalManifest } from "../../../src/domain/artifacts/manifest.js";
+import { sha256 } from "../../../src/domain/artifacts/canonical.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
 import type { NarrationSegment, Script } from "../../../src/domain/models/script.js";
 import { parseScript } from "../../../src/domain/models/script.js";
@@ -18,6 +20,8 @@ import type { RecordingEngine } from "../../../src/domain/ports/recording-engine
 import type { SceneAssembler } from "../../../src/domain/ports/scene-assembler.js";
 import type { SceneClip, SceneSplitter } from "../../../src/domain/ports/scene-splitter.js";
 import type { VoiceGen } from "../../../src/domain/ports/voice-gen.js";
+import type { MediaProbe, MediaProbeResult } from "../../../src/domain/ports/media-probe.js";
+import type { UsageActual, UsageLedger, UsageSnapshot, Reservation, BudgetRequest } from "../../../src/domain/ports/usage-ledger.js";
 
 const script = parseScript({
   segments: [
@@ -98,13 +102,20 @@ class FakeVoiceGen implements VoiceGen {
   }
 }
 
+class FakeMediaProbe implements MediaProbe {
+  constructor(private readonly result: MediaProbeResult) {}
+  async probe(): Promise<MediaProbeResult> { return this.result; }
+}
+
 class FakePlatformProfile implements PlatformProfile {
   composeCalls = 0;
   lastParams: ComposeParams | undefined;
   async compose(params: ComposeParams): Promise<FinalVideo> {
     this.composeCalls += 1;
     this.lastParams = params;
-    return { path: "final.mp4", aspectRatio: params.rawClip.aspectRatio };
+    await mkdir(dirname(params.outputPath), { recursive: true });
+    await writeFile(params.outputPath, "video", "utf8");
+    return { path: params.outputPath, aspectRatio: params.rawClip.aspectRatio };
   }
 }
 
@@ -112,8 +123,37 @@ let scratchDir: string | undefined;
 
 async function writeApprovedFixtures(paths: ReturnType<typeof projectPaths>): Promise<void> {
   await mkdir(paths.guideoDir, { recursive: true });
+  const graph = { nodes: [], edges: [] };
   await writeFile(paths.scriptPath, JSON.stringify(script), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard), "utf8");
+  await writeFile(paths.flowGraphPath, JSON.stringify(graph), "utf8");
+  await writeFile(paths.approvalManifestPath, JSON.stringify({ ...approvalManifest({ flowGraph: sha256(graph), script: sha256(script), storyboard: sha256(storyboard), policy: sha256({ version: 2 }) }), finalized: true }), "utf8");
+}
+
+class TrackingLedger implements UsageLedger {
+  commits = 0;
+  releases = 0;
+  voiceReservations = 0;
+  async reserve(request: BudgetRequest): Promise<Reservation> { if (request.operation === "voice") this.voiceReservations += 1; return { id: `${request.operation}-1`, request }; }
+  async commit(_id: string, _actual: UsageActual): Promise<void> { this.commits += 1; }
+  async release(_id: string, _reason: string): Promise<void> { this.releases += 1; }
+  async snapshot(): Promise<UsageSnapshot> { return { spent: 0, reserved: 0 }; }
+}
+
+class RejectingLedger implements UsageLedger {
+  async reserve(_request: BudgetRequest): Promise<Reservation> { throw new Error("budget exceeded before external call"); }
+  async commit(_id: string, _actual: UsageActual): Promise<void> {}
+  async release(_id: string, _reason: string): Promise<void> {}
+  async snapshot(): Promise<UsageSnapshot> { return { spent: 0, reserved: 0 }; }
+}
+
+class CommitFailingLedger implements UsageLedger {
+  commits = 0;
+  releases = 0;
+  async reserve(request: BudgetRequest): Promise<Reservation> { return { id: `${request.operation}-1`, request }; }
+  async commit(_id: string, _actual: UsageActual): Promise<void> { this.commits += 1; throw new Error("ledger commit failed"); }
+  async release(_id: string, _reason: string): Promise<void> { this.releases += 1; }
+  async snapshot(): Promise<UsageSnapshot> { return { spent: 0, reserved: 0 }; }
 }
 
 afterEach(async () => {
@@ -187,14 +227,91 @@ describe("runRender", () => {
       paths,
     );
 
-    expect(video).toEqual({ path: "final.mp4", aspectRatio: "16:9" });
+    expect(video).toEqual({ path: paths.outputPath, aspectRatio: "16:9" });
     expect(engine.captureCalls).toBe(1);
     expect(effectsEngine.applyCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
     expect(profile.composeCalls).toBe(1);
-    // The pipeline must hand the STABLE project output path to compose(), not let the adapter
-    // pick its own (temp-dir) path.
-    expect(profile.lastParams?.outputPath).toBe(paths.outputPath);
+    expect(profile.lastParams?.outputPath).not.toBe(paths.outputPath);
+    expect(profile.lastParams?.outputPath).toMatch(/\.mp4$/);
+  });
+
+  it("requires an existing finalized approval manifest and never issues one", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    await unlink(paths.approvalManifestPath);
+    const engine = new FakeRecordingEngine();
+    await expect(runRender({ recordingEngine: engine, preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile() }, true, paths)).rejects.toThrow(/finalized approval manifest/i);
+    expect(engine.captureCalls).toBe(0);
+  });
+
+  it("stops before any external adapter when the render budget cannot be reserved", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const engine = new FakeRecordingEngine();
+    const voice = new FakeVoiceGen();
+    const profile = new FakePlatformProfile();
+    await expect(runRender({ recordingEngine: engine, preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: voice, platformProfile: profile, usageLedger: new RejectingLedger() }, true, paths)).rejects.toThrow("budget");
+    expect(engine.captureCalls).toBe(0);
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(profile.composeCalls).toBe(0);
+  });
+
+
+  it("blocks delivery with actionable quality failures before committing the render reservation", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const ledger = new TrackingLedger();
+    const profile = new FakePlatformProfile();
+
+    await expect(runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: profile, mediaProbe: new FakeMediaProbe({ durationMs: 500, hasVideo: false, hasAudio: true }), usageLedger: ledger }, true, paths, "silent")).rejects.toThrow(/output has no video stream.*shorter than planned.*silent output must not contain an audio stream/s);
+
+    expect(ledger.commits).toBe(0);
+    expect(ledger.releases).toBe(0);
+    await expect(stat(profile.lastParams!.outputPath)).rejects.toThrow();
+    await expect(readFile(paths.captionsPath, "utf8")).rejects.toThrow();
+  });
+
+  it("retains an external-work reservation when the render ledger commit fails", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const ledger = new CommitFailingLedger();
+    const profile = new FakePlatformProfile();
+
+    await expect(runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: profile, mediaProbe: new FakeMediaProbe({ durationMs: 1500, hasVideo: true, hasAudio: false }), usageLedger: ledger }, true, paths, "silent")).rejects.toThrow("ledger commit failed");
+
+    expect(ledger.commits).toBe(1);
+    expect(ledger.releases).toBe(0);
+    await expect(stat(profile.lastParams!.outputPath)).rejects.toThrow();
+    await expect(readFile(paths.captionsPath, "utf8")).rejects.toThrow();
+  });
+
+  it("renders silent output without VoiceGen quota and writes an accessible captions sidecar", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const voice = new FakeVoiceGen();
+    const ledger = new TrackingLedger();
+
+    await runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: voice, platformProfile: new FakePlatformProfile(), mediaProbe: new FakeMediaProbe({ durationMs: 1500, hasVideo: true, hasAudio: false }), usageLedger: ledger }, true, paths, "silent");
+
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
+    expect(ledger.voiceReservations).toBe(0);
+  });
+
+  it("writes an accessible captions sidecar for voiced output too", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+
+    await runRender({ recordingEngine: new FakeRecordingEngine(), preRollTrimmer: new FakePreRollTrimmer(), privacyCutter: new FakePrivacyCutter(), effectsEngine: new FakeEffectsEngine(), sceneSplitter: new FakeSceneSplitter(), sceneAssembler: new FakeSceneAssembler(), voiceGen: new FakeVoiceGen(), platformProfile: new FakePlatformProfile() }, true, paths, "voice");
+
+    expect(await readFile(paths.captionsPath, "utf8")).toContain("Let's invite a teammate.");
   });
 
   describe("missing ELEVENLABS_API_KEY", () => {

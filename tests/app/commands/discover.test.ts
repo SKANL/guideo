@@ -6,6 +6,9 @@ import { runDiscover } from "../../../src/app/commands/discover.js";
 import { projectPaths } from "../../../src/app/paths.js";
 import type { FlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Target } from "../../../src/domain/ports/target.js";
+import type { ArtifactManifest, ArtifactRef } from "../../../src/domain/artifacts/manifest.js";
+import type { ArtifactStore } from "../../../src/domain/ports/artifact-store.js";
+import type { BudgetRequest, Reservation, UsageActual, UsageLedger, UsageSnapshot } from "../../../src/domain/ports/usage-ledger.js";
 
 class FakeTarget implements Target {
   discoverCalls = 0;
@@ -14,6 +17,26 @@ class FakeTarget implements Target {
     this.discoverCalls += 1;
     return this.graph;
   }
+}
+
+class MemoryArtifactStore implements ArtifactStore {
+  readonly refs = new Map<string, ArtifactRef>();
+  readonly quarantines: string[] = [];
+  async lookup(key: ArtifactRef) { return this.refs.get(key.sha256) ?? null; }
+  async finalize(_input: AsyncIterable<Uint8Array>, manifest: Omit<ArtifactManifest, "sha256">) {
+    const ref = { ...manifest, sha256: "cached-flow" } as ArtifactRef;
+    this.refs.set(ref.sha256, ref);
+    return ref;
+  }
+  async quarantine(runId: string, reason: string) { this.quarantines.push(`${runId}:${reason}`); }
+}
+
+class CountingLedger implements UsageLedger {
+  reserves = 0; commits: UsageActual[] = []; releases = 0;
+  async reserve(request: BudgetRequest): Promise<Reservation> { this.reserves += 1; return { id: String(this.reserves), request }; }
+  async commit(_id: string, actual: UsageActual) { this.commits.push(actual); }
+  async release(_id: string, _reason: string) { this.releases += 1; }
+  async snapshot(): Promise<UsageSnapshot> { return { spent: 0, reserved: 0 }; }
 }
 
 let scratchDir: string | undefined;
@@ -68,5 +91,32 @@ describe("runDiscover", () => {
 
     const written = JSON.parse(await readFile(paths.flowGraphPath, "utf8"));
     expect(written).toEqual(secondGraph);
+  });
+
+  it("reuses a finalized, valid discovered graph without reserving quota", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    const graph: FlowGraph = { nodes: [{ id: "n1", feature: "invite", useCase: "Invite", preconditions: [], selectors: {} }], edges: [] };
+    const store = new MemoryArtifactStore();
+    const first = new FakeTarget(graph);
+    await runDiscover({ target: first, artifactStore: store }, paths);
+    const second = new FakeTarget(graph);
+    const ledger = new CountingLedger();
+    await runDiscover({ target: second, artifactStore: store, usageLedger: ledger }, paths);
+    expect(second.discoverCalls).toBe(0);
+    expect(ledger.reserves).toBe(0);
+  });
+
+  it("bounds discovery retries, releases the reservation, and quarantines the failed run", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    const target: Target & { calls: number } = { calls: 0, async discover() { this.calls += 1; throw new Error("network down"); } };
+    const store = new MemoryArtifactStore();
+    const ledger = new CountingLedger();
+    await expect(runDiscover({ target, artifactStore: store, usageLedger: ledger }, paths, { maxAttempts: 2 })).rejects.toThrow(/discovery failed after 2 attempt/);
+    expect(target.calls).toBe(2);
+    expect(ledger.reserves).toBe(1);
+    expect(ledger.releases).toBe(1);
+    expect(store.quarantines).toHaveLength(1);
   });
 });

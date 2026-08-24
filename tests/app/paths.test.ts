@@ -10,8 +10,11 @@ describe("projectPaths", () => {
     expect(paths).toEqual({
       guideoDir,
       flowGraphPath: join(guideoDir, "flow-graph.json"),
+      flowGraphCachePath: join(guideoDir, "flow-graph-cache.json"),
       scriptPath: join(guideoDir, "script.json"),
       storyboardPath: join(guideoDir, "storyboard.json"),
+      approvalManifestPath: join(guideoDir, "approval-manifest.json"),
+      captionsPath: join(guideoDir, "captions.srt"),
       outputPath: join(guideoDir, "output", "youtube.mp4"),
     });
   });

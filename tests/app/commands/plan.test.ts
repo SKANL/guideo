@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPlan } from "../../../src/app/commands/plan.js";
 import { projectPaths } from "../../../src/app/paths.js";
+import { sha256 } from "../../../src/domain/artifacts/canonical.js";
+import { approvalManifest } from "../../../src/domain/artifacts/manifest.js";
 import { parseBrief } from "../../../src/domain/models/brief.js";
 import { parseFlowGraph } from "../../../src/domain/models/flow-graph.js";
 import type { Audio, FinalVideo, RawClip } from "../../../src/domain/models/media.js";
@@ -118,6 +120,16 @@ describe("runPlan", () => {
     const writtenStoryboard = JSON.parse(await readFile(paths.storyboardPath, "utf8"));
     expect(writtenScript).toEqual(result.script);
     expect(writtenStoryboard).toEqual(result.storyboard);
+    const approval = JSON.parse(await readFile(paths.approvalManifestPath, "utf8"));
+    expect(approval).toEqual({
+      ...approvalManifest({
+        flowGraph: sha256(graph),
+        script: sha256(result.script),
+        storyboard: sha256(result.storyboard),
+        policy: sha256({ version: 2 }),
+      }),
+      finalized: true,
+    });
 
     // The hard stop: these adapters were constructed but never passed to runPlan, and their call
     // counters prove zero spend happened as a side effect of planning.

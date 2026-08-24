@@ -6,6 +6,7 @@ import {
   ClaudeAgentScriptGen,
   ElevenLabsVoice,
   FfmpegEffectsEngine,
+  FfmpegMediaProbe,
   FfmpegPreRollTrimmer,
   FfmpegPrivacyCutter,
   FfmpegSceneAssembler,
@@ -24,6 +25,19 @@ import type { SceneSplitter } from "../domain/ports/scene-splitter.js";
 import type { ScriptGen } from "../domain/ports/script-gen.js";
 import type { Target } from "../domain/ports/target.js";
 import type { VoiceGen } from "../domain/ports/voice-gen.js";
+import type { MediaProbe } from "../domain/ports/media-probe.js";
+import type { UsageLedger } from "../domain/ports/usage-ledger.js";
+import { FileUsageLedger } from "../adapters/usage/file-usage-ledger.js";
+import { FsArtifactStore } from "../adapters/storage/fs-artifact-store.js";
+import type { ArtifactStore } from "../domain/ports/artifact-store.js";
+import { join } from "node:path";
+
+const DEFAULT_USAGE_LIMIT = 600_000;
+
+function usageLimitFromEnv(value = process.env.GUIDEO_USAGE_LIMIT): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_USAGE_LIMIT;
+}
 
 export interface Container {
   readonly target: Target;
@@ -36,6 +50,9 @@ export interface Container {
   readonly sceneAssembler: SceneAssembler;
   readonly voiceGen: VoiceGen;
   readonly platformProfile: PlatformProfile;
+  readonly mediaProbe?: MediaProbe;
+  readonly artifactStore?: ArtifactStore;
+  readonly usageLedger?: UsageLedger;
 }
 
 // Every field is independently overridable (tests inject fakes for one or more ports; the rest
@@ -52,5 +69,8 @@ export function createContainer(overrides: Partial<Container> = {}): Container {
     sceneAssembler: overrides.sceneAssembler ?? new FfmpegSceneAssembler(),
     voiceGen: overrides.voiceGen ?? new ElevenLabsVoice(),
     platformProfile: overrides.platformProfile ?? new YouTubeProfile(),
+    mediaProbe: overrides.mediaProbe ?? new FfmpegMediaProbe(),
+    artifactStore: overrides.artifactStore ?? new FsArtifactStore(join(process.cwd(), ".guideo", "artifacts")),
+    usageLedger: overrides.usageLedger ?? new FileUsageLedger(join(process.cwd(), ".guideo", "usage.json"), { limit: usageLimitFromEnv() }),
   };
 }

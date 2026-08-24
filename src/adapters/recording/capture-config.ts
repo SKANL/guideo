@@ -44,6 +44,8 @@ export interface CaptureConfig {
   // Bounded poll for a navigate step's URL (or a nav-anchor click's expected navigation) to
   // actually change before the step is declared unverified and a retry/fallback kicks in.
   readonly stepVerifyTimeoutMs: number;
+  // Maximum number of durable resume points retained in RawClip.captureEvidence.
+  readonly maxCheckpoints: number;
 }
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
@@ -67,4 +69,5 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   stepRetries: 2,
   stepRetryWaitMs: 300,
   stepVerifyTimeoutMs: 2_000,
+  maxCheckpoints: 20,
 };

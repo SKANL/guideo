@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,6 +22,7 @@ import type { SceneClip, SceneSplitter } from "../../src/domain/ports/scene-spli
 import type { FlowGraphRoutes, ScriptGen } from "../../src/domain/ports/script-gen.js";
 import type { Target } from "../../src/domain/ports/target.js";
 import type { VoiceGen } from "../../src/domain/ports/voice-gen.js";
+import type { MediaProbe, MediaProbeResult } from "../../src/domain/ports/media-probe.js";
 
 const graph: FlowGraph = {
   nodes: [
@@ -125,13 +126,20 @@ class FakeVoiceGen implements VoiceGen {
   }
 }
 
+class FakeMediaProbe implements MediaProbe {
+  async probe(_path: string): Promise<MediaProbeResult> {
+    return { durationMs: 1500, hasVideo: true, hasAudio: true };
+  }
+}
+
 class FakePlatformProfile implements PlatformProfile {
   composeCalls = 0;
   lastParams: ComposeParams | undefined;
   async compose(params: ComposeParams): Promise<FinalVideo> {
     this.composeCalls += 1;
     this.lastParams = params;
-    return { path: "final.mp4", aspectRatio: params.rawClip.aspectRatio };
+    await writeFile(params.outputPath, "video", "utf8");
+    return { path: params.outputPath, aspectRatio: params.rawClip.aspectRatio };
   }
 }
 
@@ -168,6 +176,7 @@ function makeContainer(): {
       sceneAssembler,
       voiceGen: voice,
       platformProfile: profile,
+      mediaProbe: new FakeMediaProbe(),
     },
     target,
     scriptGen,
@@ -386,7 +395,7 @@ describe("runCli", () => {
     const code = await runCli(["render", "--approve"], container, cwd, sink.print, sink.printErr);
 
     expect(code).toBe(0);
-    expect(sink.lines.at(-1)).toMatch(/final\.mp4/);
+    expect(sink.lines.at(-1)).toContain(projectPaths({ project: "default", cwd }).outputPath);
     expect(engine.captureCalls).toBe(1);
     expect(voice.synthesizeCalls).toBe(1);
     expect(profile.composeCalls).toBe(1);
@@ -417,9 +426,10 @@ describe("runCli", () => {
     expect(code).toBe(0);
     const expectedOutputPath = projectPaths({ project: "acme", cwd }).outputPath;
     expect(expectedOutputPath).toMatch(/[\\/]projects[\\/]acme[\\/]output[\\/]youtube\.mp4$/);
-    expect(profile.lastParams?.outputPath).toBe(expectedOutputPath);
-    // No mkdtemp/OS-temp-dir path leaked into what the compose adapter was asked to write to.
-    expect(profile.lastParams?.outputPath).not.toMatch(/guideo-compose-/);
+    expect(profile.lastParams?.outputPath).not.toBe(expectedOutputPath);
+    expect(profile.lastParams?.outputPath).toMatch(/[\\/]output[\\/]\.[\w-]+\.mp4$/);
+    await expect(stat(expectedOutputPath)).resolves.toBeDefined();
+    await expect(stat(profile.lastParams!.outputPath)).rejects.toThrow();
   });
 
   it("isolates artifacts per --project: a different project writes to a different directory", async () => {

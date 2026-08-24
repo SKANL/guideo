@@ -1,4 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
+import { sha256 } from "../../domain/artifacts/canonical.js";
+import { type ArtifactManifest } from "../../domain/artifacts/manifest.js";
 import type { FinalVideo } from "../../domain/models/media.js";
 import type { NarrationMode } from "../../domain/models/narration-mode.js";
 import { parseScript } from "../../domain/models/script.js";
@@ -12,46 +16,49 @@ import type { RecordingEngine } from "../../domain/ports/recording-engine.js";
 import type { SceneAssembler } from "../../domain/ports/scene-assembler.js";
 import type { SceneSplitter } from "../../domain/ports/scene-splitter.js";
 import type { VoiceGen } from "../../domain/ports/voice-gen.js";
-import { review } from "../../domain/review-gate.js";
+import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
+import { reviewWithManifest } from "../../domain/review-gate.js";
+import { assertQuality } from "../../domain/quality/quality-gate.js";
+import type { MediaProbe } from "../../domain/ports/media-probe.js";
+import { toSrt } from "../../adapters/compose/srt.js";
 import { type GuideoPaths, projectPaths } from "../paths.js";
 
-// render: the only code path that may reach RecordingEngine/VoiceGen/PlatformProfile — and only
-// when `approve` is explicitly true. Without it, this throws before reading or touching anything
-// spend-related: no file read, no adapter call. `approve` stands in for the human decision the
-// user records by re-running with --approve only after reading `plan`'s printed review — the
-// CLI's plan/render split IS the REVIEW gate. `review()` (review-gate.ts) is the only place
-// permitted to mint the ApprovedStoryboard the domain render() requires.
 export async function runRender(
-  container: {
-    readonly recordingEngine: RecordingEngine;
-    readonly preRollTrimmer: PreRollTrimmer;
-    readonly privacyCutter: PrivacyCutter;
-    readonly effectsEngine: EffectsEngine;
-    readonly sceneSplitter: SceneSplitter;
-    readonly sceneAssembler: SceneAssembler;
-    readonly voiceGen: VoiceGen;
-    readonly platformProfile: PlatformProfile;
-  },
+  container: { readonly recordingEngine: RecordingEngine; readonly preRollTrimmer: PreRollTrimmer; readonly privacyCutter: PrivacyCutter; readonly effectsEngine: EffectsEngine; readonly sceneSplitter: SceneSplitter; readonly sceneAssembler: SceneAssembler; readonly voiceGen: VoiceGen; readonly platformProfile: PlatformProfile; readonly mediaProbe?: MediaProbe; readonly usageLedger?: UsageLedger },
   approve: boolean,
   paths: GuideoPaths = projectPaths({ project: "default" }),
   narration: NarrationMode = "both",
 ): Promise<FinalVideo> {
-  if (!approve) {
-    throw new Error(
-      "guideo render refused: no --approve flag given. Review the script + storyboard printed by " +
-        "`guideo plan` (and written under .guideo/), then re-run `guideo render --approve` only " +
-        "once you approve. No capture or voice synthesis has run.",
-    );
-  }
-
+  if (!approve) throw new Error("guideo render refused: no --approve flag given. Review `guideo plan` output before rendering.");
   const script = parseScript(JSON.parse(await readFile(paths.scriptPath, "utf8")));
   const storyboard = parseStoryboard(JSON.parse(await readFile(paths.storyboardPath, "utf8")));
-  const approved = review(storyboard, { kind: "approved" });
-  if (!approved) {
-    throw new Error(
-      "unexpected: review() did not mint an ApprovedStoryboard for an approved decision.",
-    );
+  const graph = JSON.parse(await readFile(paths.flowGraphPath, "utf8"));
+  const actual = { flowGraph: sha256(graph), script: sha256(script), storyboard: sha256(storyboard), policy: sha256({ version: 2 }) };
+  let manifest: ArtifactManifest;
+  try { manifest = JSON.parse(await readFile(paths.approvalManifestPath, "utf8")) as ArtifactManifest; }
+  catch { throw new Error("render requires an existing finalized approval manifest"); }
+  if (manifest.finalized !== true) throw new Error("render requires an existing finalized approval manifest");
+  const approved = reviewWithManifest(storyboard, manifest, actual);
+  if (!approved) throw new Error("finalized approval manifest did not approve storyboard");
+  const reservation = await container.usageLedger?.reserve({ operation: "render", estimated: 1 });
+  const token = randomUUID();
+  const temporaryVideoPath = join(dirname(paths.outputPath), `.${token}.mp4`);
+  const temporaryCaptionsPath = join(dirname(paths.captionsPath), `.${token}.srt`);
+  let externalWorkCompleted = false;
+  try {
+    await mkdir(dirname(paths.outputPath), { recursive: true });
+    await mkdir(dirname(paths.captionsPath), { recursive: true });
+    const video = await render(container, approved, script, temporaryVideoPath, { narration });
+    externalWorkCompleted = true;
+    await writeFile(temporaryCaptionsPath, toSrt(script.segments.map((segment) => ({ text: segment.text, startMs: segment.timing.startMs, durationMs: segment.timing.durationMs }))), "utf8");
+    if (container.mediaProbe) assertQuality(await container.mediaProbe.probe(video.path), { expectedDurationMs: script.segments.reduce((total, segment) => total + segment.timing.durationMs, 0), expectedSegments: script.segments.length, actualSegments: new Set(storyboard.steps.map((step) => step.narrationSegmentId)).size, narration, captionsRequired: true, hasCaptions: (await readFile(temporaryCaptionsPath, "utf8")).trim().length > 0 });
+    if (reservation) await container.usageLedger!.commit(reservation.id, { cost: 1, cached: false });
+    await rename(video.path, paths.outputPath);
+    await rename(temporaryCaptionsPath, paths.captionsPath);
+    return { ...video, path: paths.outputPath };
+  } catch (error) {
+    await Promise.all([unlink(temporaryVideoPath).catch(() => undefined), unlink(temporaryCaptionsPath).catch(() => undefined)]);
+    if (reservation && !externalWorkCompleted) await container.usageLedger!.release(reservation.id, "render failed");
+    throw error;
   }
-
-  return render(container, approved, script, paths.outputPath, { narration });
 }

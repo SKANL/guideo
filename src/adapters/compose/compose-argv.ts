@@ -76,15 +76,14 @@ export function buildComposeArgv(
 ): string[] {
   const narration = params.narration ?? "both";
 
-  if (narration === "subtitles") {
+  if (narration === "subtitles" || narration === "silent") {
     // No narration audio at all in this mode: silent output (-an, no audio input/map/codec), with
     // subtitles burned directly into the video stream (hardsub) so they're visible without sound.
     return [
       "-y",
       "-i",
       sanitizePositionalPath(params.rawClip.path),
-      "-vf",
-      `subtitles=${escapeForSubtitlesFilter(srtPath)}`,
+      ...(narration === "subtitles" ? ["-vf", `subtitles=${escapeForSubtitlesFilter(srtPath)}`] : []),
       "-map",
       "0:v",
       "-c:v",

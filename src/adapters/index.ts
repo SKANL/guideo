@@ -1,6 +1,7 @@
 // Port implementations (Target, RecordingEngine, ScriptGen, VoiceGen, EffectsEngine, ReviewGate)
 // land here as they're built.
 export * from "./compose/youtube-profile.js";
+export * from "./media/ffmpeg-media-probe.js";
 export * from "./effects/cut-private-scenes.js";
 export * from "./effects/ffmpeg-effects.js";
 export * from "./effects/ffmpeg-scene-assembler.js";
