@@ -42,7 +42,9 @@ class FakeScriptGen implements ScriptGen {
           },
         ],
       }),
-      storyboard: parseStoryboard({ steps: [{ action: "pause", narrationSegmentId: "seg-1" }] }),
+      storyboard: parseStoryboard({
+        steps: [{ action: "click", selector: "#invite-btn", narrationSegmentId: "seg-1" }],
+      }),
     };
   }
 }
@@ -172,6 +174,26 @@ describe("runPlan", () => {
     const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
 
     await expect(runPlan({ scriptGen }, brief, paths)).rejects.toThrow(/guideo discover/);
+  });
+
+  it("fails closed before persistence when an interactive brief produces only pauses", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-plan-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeGraph(paths);
+    const scriptGen: ScriptGen = {
+      async generate() {
+        return {
+          script: parseScript({
+            segments: [{ id: "seg-1", text: "Invite a teammate.", timing: { startMs: 0, durationMs: 1000 } }],
+          }),
+          storyboard: parseStoryboard({ steps: [{ action: "pause", narrationSegmentId: "seg-1" }] }),
+        };
+      },
+    };
+    const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
+
+    await expect(runPlan({ scriptGen }, brief, paths)).rejects.toThrow(/requires at least one executable action/i);
+    await expect(readFile(paths.storyboardPath, "utf8")).rejects.toThrow();
   });
 
   it("refuses to persist a generated storyboard with an unknown selector", async () => {

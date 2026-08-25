@@ -11,6 +11,7 @@ import type {
 } from "../../../src/adapters/target/url-creds-target.js";
 import {
   buildRobustSelector,
+  escapeCssIdentifier,
   UrlCredsTarget,
 } from "../../../src/adapters/target/url-creds-target.js";
 import { FlowGraphSchema } from "../../../src/domain/models/flow-graph.js";
@@ -28,6 +29,8 @@ interface FakeLinkSpec {
   text?: string;
   testid?: string;
   id?: string;
+  name?: string;
+  role?: string;
   ariaLabel?: string;
   box?: { x: number; y: number; width: number; height: number };
 }
@@ -35,6 +38,7 @@ interface FakeLinkSpec {
 interface FakePageSpec {
   title: string;
   links: FakeLinkSpec[];
+  controls?: FakeLinkSpec[];
 }
 
 function fakeLink(spec: FakeLinkSpec): PatchrightElementHandle {
@@ -45,6 +49,8 @@ function fakeLink(spec: FakeLinkSpec): PatchrightElementHandle {
       if (name === "href") return spec.href || null;
       if (name === "data-testid") return spec.testid ?? null;
       if (name === "id") return spec.id ?? null;
+      if (name === "name") return spec.name ?? null;
+      if (name === "role") return spec.role ?? null;
       if (name === "aria-label") return spec.ariaLabel ?? null;
       return null;
     },
@@ -91,6 +97,9 @@ function fakeSite(pages: Record<string, FakePageSpec>, postLoginUrl = HOME_URL) 
     url: () => currentUrl,
     title: async () => pages[normalize(currentUrl)]?.title ?? "",
     $$: async (selector: string) => {
+      if (selector === "[data-action]") {
+        return (pages[normalize(currentUrl)]?.controls ?? []).map(fakeLink);
+      }
       const parts = selector.split(",").map((part) => part.trim());
       if (!parts.includes("a[href]")) return [];
       return (pages[normalize(currentUrl)]?.links ?? []).map(fakeLink);
@@ -633,6 +642,57 @@ describe("UrlCredsTarget", () => {
     await rm(outputPath, { force: true });
   });
 
+  it("collects bounded deterministic action-control evidence without clicking controls or changing nav routes", async () => {
+    const REPORTS_URL = `${BASE_URL}/reports`;
+    const { launcher, click } = fakeSite({
+      [normalize(HOME_URL)]: {
+        title: "Home",
+        links: [
+          { href: "/reports", text: "Reports", testid: "nav-reports" },
+          { href: "/reports", text: "Reports duplicate", testid: "nav-reports" },
+        ],
+        controls: [
+          { href: "", text: "Add to cart", testid: "add-to-cart" },
+          { href: "", text: "Cart", id: "add-to-cart-test.allthethings()-t-shirt-(red)" },
+          { href: "", text: "Ignored", name: "ignored" },
+        ],
+      },
+      [normalize(REPORTS_URL)]: { title: "Reports", links: [] },
+    });
+    const outputPath = join(tmpdir(), `guideo-flowgraph-actions-${Date.now()}.json`);
+    const target = new UrlCredsTarget(launcher, {
+      outputPath,
+      actionableControlSelector: "[data-action]",
+      maxActionableControls: 2,
+      ...FAST_LOGIN_WAIT,
+    });
+
+    const graph = await target.discover();
+    const home = graph.nodes.find((node) => node.id === normalize(HOME_URL));
+
+    expect(home?.selectors).toEqual({
+      "add-to-cart": '[data-testid="add-to-cart"]',
+      cart: "#add-to-cart-test\\.allthethings\\(\\)-t-shirt-\\(red\\)",
+      reports: '[data-testid="nav-reports"]',
+    });
+    expect(home?.locatorEvidence?.candidates).toEqual([
+      "#add-to-cart-test\\.allthethings\\(\\)-t-shirt-\\(red\\)",
+      '[data-testid="add-to-cart"]',
+      '[data-testid="nav-reports"]',
+    ]);
+    expect(graph.edges).toEqual([
+      {
+        from: normalize(HOME_URL),
+        to: normalize(REPORTS_URL),
+        action: 'click [data-testid="nav-reports"]',
+      },
+    ]);
+    expect(click).not.toHaveBeenCalledWith('[data-testid="add-to-cart"]');
+    expect(click).not.toHaveBeenCalledWith("#add-to-cart-test\\.allthethings\\(\\)-t-shirt-\\(red\\)");
+
+    await rm(outputPath, { force: true });
+  });
+
   // --- Self-healing discovery: retry nav queries on execution-context-destroyed races -------
   // (v2 sub-project 1 — see docs/superpowers/specs/2026-07-27-guideo-v2-timeline-effects-design.md
   // section E). Real e2e: a client-rendered SPA can trigger a late redirect right after goto()
@@ -802,6 +862,14 @@ describe("buildRobustSelector", () => {
     expect(selector).toBe("#nav-settings");
   });
 
+  it("escapes punctuation-heavy ids into parse-safe CSS selectors", async () => {
+    const selector = await buildRobustSelector(
+      fakeLink({ href: "", id: "add-to-cart-test.allthethings()-t-shirt-(red)" }),
+    );
+
+    expect(selector).toBe("#add-to-cart-test\\.allthethings\\(\\)-t-shirt-\\(red\\)");
+  });
+
   it("falls back to the raw href as a CSS attribute selector when no testid or id is present", async () => {
     const selector = await buildRobustSelector(fakeLink({ href: "/x", text: "Dashboard" }));
     expect(selector).toBe('a[href="/x"]');
@@ -835,6 +903,37 @@ describe("buildRobustSelector", () => {
     for (const spec of specs) {
       const selector = await buildRobustSelector(fakeLink(spec));
       expect(selector).not.toMatch(/^role=/);
+    }
+  });
+});
+
+describe("escapeCssIdentifier", () => {
+  it("preserves simple identifiers exactly", () => {
+    expect(escapeCssIdentifier("shopping-cart_2")).toBe("shopping-cart_2");
+  });
+
+  it("serializes punctuation-heavy ids and classes as parse-safe CSS identifiers", () => {
+    const id = "add-to-cart-test.allthethings()-t-shirt-(red)";
+    const className = "inventory-item/primary:active";
+
+    expect(`#${escapeCssIdentifier(id)}`).toBe("#add-to-cart-test\\.allthethings\\(\\)-t-shirt-\\(red\\)");
+    expect(`.${escapeCssIdentifier(className)}`).toBe(".inventory-item\\/primary\\:active");
+  });
+
+  it("uses the browser CSS.escape implementation when it is available", () => {
+    const globalWithCss = globalThis as typeof globalThis & {
+      CSS?: { escape?: (identifier: string) => string };
+    };
+    const css = globalWithCss.CSS;
+    Object.defineProperty(globalThis, "CSS", {
+      configurable: true,
+      value: { escape: vi.fn(() => "native-escaped") },
+    });
+
+    try {
+      expect(escapeCssIdentifier("punctuation!")).toBe("native-escaped");
+    } finally {
+      Object.defineProperty(globalThis, "CSS", { configurable: true, value: css });
     }
   });
 });

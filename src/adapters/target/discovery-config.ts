@@ -19,6 +19,10 @@ export interface DiscoveryConfig extends LoginConfig {
   // Clickable nav-item selector: anchors AND buttons AND common ARIA link/menu/tab roles —
   // SPA navigation is frequently button/router-driven, not `<a href>`-only.
   readonly navItemSelector: string;
+  // Read-only, bounded evidence collection for controls that may drive a walkthrough but must
+  // never be clicked during discovery. Attribute candidates come first, then generic controls.
+  readonly actionableControlSelector: string;
+  readonly maxActionableControls: number;
   // How long to wait, after clicking a non-anchor nav item, for the URL to change before
   // concluding it wasn't a navigation control (e.g. a toggle/dropdown) and skipping it.
   readonly navClickTimeoutMs: number;
@@ -38,6 +42,8 @@ export const DEFAULT_DISCOVERY_CONFIG: DiscoveryConfig = {
   outputPath: join(process.cwd(), ".guideo", "flow-graph.json"),
   navContainerSelectors: ["nav", "aside", "[role='navigation']", "[data-testid='sidebar']"],
   navItemSelector: "a[href], button, [role='link'], [role='menuitem'], [role='tab']",
+  actionableControlSelector: "[data-testid], [id], [name], [role], button, input, a[href]",
+  maxActionableControls: 40,
   navClickTimeoutMs: 3_000,
   navPollIntervalMs: 200,
   navQueryRetries: 2,

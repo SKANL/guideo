@@ -204,6 +204,7 @@ describe("plan -> review -> render (end-to-end against fakes)", () => {
 
     const subtitles = profile.lastParams?.subtitles as Subtitle[];
     expect(subtitles).toEqual([{ text: "Let's invite a teammate.", startMs: 0, durationMs: 1500 }]);
+    expect(profile.lastParams?.plannedDurationMs).toBe(1500);
   });
 
   // Regression (real e2e): ElevenLabs free tier allows only 2 concurrent requests; fanning out

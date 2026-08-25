@@ -41,6 +41,7 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
         { narrationSegmentId: "seg-2", startMs: 1000, endMs: 3000 },
       ],
       preRollMs: 0,
+      resolvedEffects: [{ narrationSegmentId: "seg-2", type: "zoom-in", region: { x: 100, y: 100, w: 50, h: 20 } }],
     };
     const approved = approve({
       steps: [
@@ -75,6 +76,7 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
       aspectRatio: "16:9",
       scenes: [],
       preRollMs: 0,
+      resolvedEffects: [{ narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 100, y: 100, w: 50, h: 20 } }],
     };
     const sceneClip: SceneClip = {
       path: "scene.mp4",
@@ -126,8 +128,8 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
     const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
     // center = 1440, 720. The graph must consume capture evidence, rather than fall back to frame center.
-    expect(graph?.filterComplex).toContain("x='1440-");
-    expect(graph?.filterComplex).toContain("y='720-");
+    expect(graph?.filterComplex).toContain("x='max(0,min(1440-");
+    expect(graph?.filterComplex).toContain("y='max(0,min(720-");
     // 1.12 is visually too subtle at 1080p; the renderer enforces the documented professional floor.
     expect(graph?.filterComplex).toContain("(1+(1.25-1)*");
   });
@@ -174,6 +176,10 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
       aspectRatio: "16:9",
       scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 2000 }],
       preRollMs: 0,
+      resolvedEffects: [
+        { narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 100, y: 100, w: 50, h: 20 } },
+        { narrationSegmentId: "seg-1", type: "blur-region", region: { x: 1, y: 2, w: 3, h: 4 } },
+      ],
     };
     const approved = approve({
       steps: [
@@ -245,8 +251,8 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
 
     // center = x + w/2 = 110, y + h/2 = 50 — seg-2's resolved region, NOT seg-1's (index 0) or the
     // frame center.
-    expect(graph?.filterComplex).toContain("x='110-");
-    expect(graph?.filterComplex).toContain("y='50-");
+    expect(graph?.filterComplex).toContain("x='max(0,min(110-");
+    expect(graph?.filterComplex).toContain("y='max(0,min(50-");
   });
 
   it("falls back to reading an explicit region straight from effect.params when clip.resolvedEffects is absent (back-compat)", () => {
@@ -279,7 +285,7 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
     expect(graph?.filterComplex).not.toContain("t=fill");
   });
 
-  it("falls back to the frame center for zoom-in when neither resolvedEffects nor explicit params supply a region", () => {
+  it("skips a zoom when capture could not resolve a visible target", () => {
     const clip: RawClip = {
       path: "clip.mp4",
       durationMs: 1000,
@@ -305,7 +311,22 @@ describe("buildSceneEffectsGraph — per-scene-clip architecture: maps ONE scene
 
     const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
 
-    expect(graph?.filterComplex).toContain("x='iw/2-");
+    expect(graph).toBeNull();
+  });
+
+  it("clamps an edge target inside the source raster so a focal zoom cannot expose black pixels", () => {
+    const clip: RawClip = {
+      path: "clip.mp4", durationMs: 1000, aspectRatio: "16:9",
+      scenes: [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 1000 }], preRollMs: 0,
+      resolvedEffects: [{ narrationSegmentId: "seg-1", type: "zoom-in", region: { x: 0, y: 0, w: 10, h: 10 } }],
+    };
+    const approved = approve({ steps: [{ action: "zoom", selector: "#edge", narrationSegmentId: "seg-1", effects: [{ type: "zoom-in", params: { selector: "#edge" } }] }] });
+    const sceneClip: SceneClip = { narrationSegmentId: "seg-1", path: "scene.mp4", durationMs: 1000 };
+
+    const graph = buildSceneEffectsGraph(clip, sceneClip, approved);
+
+    expect(graph?.filterComplex).toContain("x='max(0,min(5-(iw/");
+    expect(graph?.filterComplex).toContain("y='max(0,min(5-(ih/");
   });
 
   it("skips a malformed effect (fails its own builder validation) instead of throwing", () => {

@@ -30,11 +30,32 @@ export function applyDirectorDefaults(
   config: Partial<DirectorConfig> = {},
 ): Storyboard {
   const cfg = { ...DEFAULT_DIRECTOR_CONFIG, ...config };
+  // `zoom` is an explicit reviewed storyboard action, not an optional director default. Compile
+  // it into a target-bound effect so capture records the action and edit can show real motion.
+  // The recording adapter resolves this selector while it is visible; unresolved targets are
+  // deterministically skipped by the effects graph rather than producing a centre/black zoom.
+  const explicitZoomSteps = storyboard.steps.map((step) => {
+    if (
+      step.action !== "zoom" ||
+      !step.selector ||
+      step.effects.some((effect) => effect.type === "zoom-in" || effect.type === "zoom-out")
+    ) {
+      return step;
+    }
+    return withAddedEffect(step, {
+      type: "zoom-in",
+      params: {
+        selector: step.selector,
+        semanticTarget: step.evidence?.reference ?? step.selector,
+        level: cfg.zoomLevel,
+      },
+    });
+  });
   // The legacy option is retained in the config contract, but it must not turn selector evidence
   // back into a zoom. Only the semantic-emphasis mode can compile an explicit focus cue.
-  if (!cfg.motionEmphasisEnabled) return storyboard;
+  if (!cfg.motionEmphasisEnabled) return { ...storyboard, steps: explicitZoomSteps };
 
-  const steps = [...storyboard.steps];
+  const steps = [...explicitZoomSteps];
   const plan = deriveMotionPlan(storyboard, script);
   const zoomedSteps = new Set<number>();
   for (const actionBeat of plan.beats) {

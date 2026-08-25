@@ -21,6 +21,9 @@ const clip: RawClip = {
     { narrationSegmentId: "seg-2", startMs: 1000, endMs: 2000 },
   ],
   preRollMs: 0,
+  resolvedEffects: [
+    { narrationSegmentId: "seg-2", type: "zoom-in", region: { x: 100, y: 60, w: 40, h: 30 } },
+  ],
 };
 
 describe("FfmpegEffectsEngine.applyToScenes — per-scene-clip architecture", () => {

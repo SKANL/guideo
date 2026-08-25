@@ -39,6 +39,7 @@ import {
   DEFAULT_LOGIN_CONFIG,
   isExecutionContextDestroyedError,
   login,
+  normalizeUrl,
   readTargetEnvOrThrow,
   resolveLoginConfig,
 } from "../target/login.js";
@@ -80,7 +81,8 @@ export interface PatchrightCapturePage extends PatchrightPage {
   keyboard: PatchrightKeyboard;
   waitForTimeout(ms: number): Promise<void>;
   video(): PatchrightVideo | null;
-  screenshot?(): Promise<unknown>;
+  // Patchright/Playwright returns PNG bytes by default. Accept a path too for injected harnesses.
+  screenshot?(): Promise<string | Uint8Array>;
 }
 
 export interface CaptureQuarantine {
@@ -154,6 +156,20 @@ function visibleSelector(selector: string): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function screenshotEvidence(value: string | Uint8Array | undefined): string | undefined {
+  if (typeof value === "string") return value || undefined;
+  if (value instanceof Uint8Array && value.byteLength > 0) {
+    return `data:image/png;base64,${Buffer.from(value).toString("base64")}`;
+  }
+  return undefined;
+}
+
+function isMalformedCssSelectorError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "SyntaxError")
+    || /invalid selector|unexpected token .*parsing css selector|did you mean to CSS\.escape/i.test(message);
 }
 
 // Matches an exact `a[href="..."]` selector — the ONLY selector shape whose target URL is
@@ -269,8 +285,8 @@ export class WebRecordingEngine implements RecordingEngine {
           async (step) => {
             const currentIndex = stepIndex++;
             traces.push({ stepIndex: currentIndex, action: step.action, url: page.url() });
-            const screenshot = await page.screenshot?.();
-            if (typeof screenshot === "string" && screenshot) screenshots.push(screenshot);
+            const screenshot = screenshotEvidence(await page.screenshot?.());
+            if (screenshot) screenshots.push(screenshot);
             if (checkpoints.length < this.config.maxCheckpoints) {
               const checkpoint = { runId, inputSha256, completedStepIndex: currentIndex, url: page.url() };
               checkpoints.push(checkpoint);
@@ -382,18 +398,26 @@ export class WebRecordingEngine implements RecordingEngine {
     stepIndex: number,
   ): Promise<StoryboardStep> {
     const evidence = step.evidence;
-    if (evidence?.urlFingerprint && evidence.urlFingerprint !== page.url()) {
+    const currentUrl = page.url();
+    if (evidence?.urlFingerprint && evidence.urlFingerprint !== sha256({ url: normalizeUrl(currentUrl) })) {
       throw new CaptureRecoveryError({
         kind: "stale-fingerprint", phase: "precondition", stepIndex,
-        expected: evidence.urlFingerprint, actual: page.url(),
+        expected: evidence.urlFingerprint, actual: currentUrl,
       });
     }
     if (!step.selector || !evidence?.locatorCandidates?.length) return step;
     const candidates = orderedLocatorCandidates(evidence.locatorCandidates, step.selector);
-    const matches = await Promise.all(candidates.map(async (selector) => ({
-      selector,
-      matches: await this.withStepRetry(() => page.$$(visibleSelector(selector)), page),
-    })));
+    const matches = await Promise.all(candidates.map(async (selector) => {
+      try {
+        return {
+          selector,
+          matches: await this.withStepRetry(() => page.$$(visibleSelector(selector)), page),
+        };
+      } catch (err) {
+        if (!isMalformedCssSelectorError(err)) throw err;
+        return { selector, matches: [] };
+      }
+    }));
     const resolved = resolveExactlyOne(matches);
     return { ...step, selector: resolved.selector };
   }

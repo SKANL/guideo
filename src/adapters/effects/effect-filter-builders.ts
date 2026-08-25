@@ -88,11 +88,15 @@ function zoomLevel(value: unknown, defaultLevel: number): number {
 
 function buildZoom(defaultLevel: number, reverse: boolean): FilterBuilder {
   return (effect, gate, region, inLabel, outLabel, uid) => {
+    // A focal zoom is valid only when capture resolved a target that was visible at action time.
+    // Falling back to the frame centre turns an unverified action into arbitrary motion and the
+    // dynamic crop can sample outside the source raster near an edge.
+    if (region === null) return null;
     const level = zoomLevel(effect.params.level, defaultLevel);
     const p = progressExpr(gate);
     const lvl = reverse ? `(${level}-(${level}-1)*${p})` : `(1+(${level}-1)*${p})`;
-    const cx = region ? String(region.x + region.w / 2) : "iw/2";
-    const cy = region ? String(region.y + region.h / 2) : "ih/2";
+    const cx = String(region.x + region.w / 2);
+    const cy = String(region.y + region.h / 2);
     const base = `${uid}_base`;
     const src = `${uid}_src`;
     const zoom = `${uid}_zoom`;
@@ -100,7 +104,7 @@ function buildZoom(defaultLevel: number, reverse: boolean): FilterBuilder {
     const cropH = `ih/${lvl}`;
     return (
       `${inLabel}split=2[${base}][${src}];` +
-      `[${src}]crop=w='${cropW}':h='${cropH}':x='${cx}-(${cropW})/2':y='${cy}-(${cropH})/2',` +
+      `[${src}]crop=w='${cropW}':h='${cropH}':x='max(0,min(${cx}-(${cropW})/2,iw-(${cropW})))':y='max(0,min(${cy}-(${cropH})/2,ih-(${cropH})))',` +
       `scale=w='iw*${lvl}':h='ih*${lvl}':eval=frame[${zoom}];` +
       `[${base}][${zoom}]overlay=0:0:${enableClause(gate)}${outLabel}`
     );

@@ -204,6 +204,10 @@ describe("effects are re-gated to each scene's OWN clip after privacy cut + spli
         { narrationSegmentId: kept.narrationSegmentId, startMs: kept.startMs, endMs: kept.endMs },
       ],
       preRollMs: 0,
+      resolvedEffects: [
+        { narrationSegmentId: "s1", type: "zoom-in", region: { x: 20, y: 20, w: 40, h: 30 } },
+        { narrationSegmentId: "s2", type: "zoom-in", region: { x: 100, y: 60, w: 40, h: 30 } },
+      ],
     };
     // Per-scene-clip architecture: s2's scene clip is its OWN standalone file, starting at LOCAL
     // time 0 regardless of where it sat on the shared/cut clip's timeline.

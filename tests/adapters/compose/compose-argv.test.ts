@@ -22,6 +22,35 @@ const professionalH264Settings = [
 ];
 
 describe("buildComposeArgv — argv-array process boundary safety", () => {
+  it("holds the last frame through the planned script endpoint without adding audio", () => {
+    const params: ComposeParams = {
+      ...baseParams,
+      plannedDurationMs: 1_900,
+      rawClip: { ...baseParams.rawClip, durationMs: 1_828 },
+    };
+
+    const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
+
+    expect(argv[argv.indexOf("-vf") + 1]).toContain("tpad=stop_mode=clone:stop_duration=0.072");
+    expect(argv).toContain("-t");
+    expect(argv[argv.indexOf("-t") + 1]).toBe("1.900");
+    expect(argv).not.toContain("-shortest");
+  });
+
+  it("pads silent subtitle renders without creating an audio stream", () => {
+    const argv = buildComposeArgv({
+      ...baseParams,
+      narration: "subtitles",
+      audioTracks: [],
+      plannedDurationMs: 1_900,
+      rawClip: { ...baseParams.rawClip, durationMs: 1_828 },
+    }, "subs.srt", "final.mp4");
+
+    expect(argv[argv.indexOf("-vf") + 1]).toContain("tpad=stop_mode=clone:stop_duration=0.072");
+    expect(argv).toContain("-an");
+    expect(argv).not.toContain("-c:a");
+  });
+
   it("reframes a vertical export with frame-preserving scale-and-pad rather than a target-losing crop", () => {
     const argv = buildComposeArgv({ ...baseParams, renderProfile: "shorts" }, "subs.srt", "shorts.mp4");
     const vf = argv[argv.indexOf("-vf") + 1] as string;

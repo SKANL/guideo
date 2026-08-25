@@ -3,6 +3,8 @@ import type { NarrationMode } from "../models/narration-mode.js";
 
 export interface ComposeParams {
   readonly rawClip: RawClip;
+  /** Script timeline endpoint that the physical video must reach when supplied. */
+  readonly plannedDurationMs?: number;
   readonly audioTracks: readonly Audio[];
   readonly subtitles: readonly Subtitle[];
   // STABLE caller-provided path the adapter must write the final video to (never a self-chosen

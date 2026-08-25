@@ -99,6 +99,17 @@ describe("applyDirectorDefaults", () => {
     ).toEqual([]);
   });
 
+  it("compiles an explicit zoom action into one target-bound effect even when defaults are disabled", () => {
+    const storyboard = parseStoryboard({
+      steps: [{ action: "zoom", selector: "#chart", narrationSegmentId: "seg-1", evidence: { reference: "Revenue chart" } }],
+    });
+
+    expect(applyDirectorDefaults(storyboard, script).steps[0]?.effects).toEqual([{
+      type: "zoom-in",
+      params: { selector: "#chart", semanticTarget: "Revenue chart", level: 1.25 },
+    }]);
+  });
+
   it("uses a timed spotlight for every semantic action and never invents a zoom without a focus cue", () => {
     const storyboard = parseStoryboard({
       steps: [

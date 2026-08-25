@@ -86,7 +86,16 @@ export function buildComposeArgv(
 ): string[] {
   const narration = params.narration ?? "both";
   const profile = resolveRenderProfile(params.renderProfile);
-  const frameFilter = buildFramePreservingFilter(profile);
+  const paddingMs = params.plannedDurationMs === undefined
+    ? 0
+    : Math.max(0, params.plannedDurationMs - params.rawClip.durationMs);
+  const frameFilter = [
+    buildFramePreservingFilter(profile),
+    ...(paddingMs > 0 ? [`tpad=stop_mode=clone:stop_duration=${(paddingMs / 1_000).toFixed(3)}`] : []),
+  ].filter((value): value is string => Boolean(value)).join(",");
+  const targetDurationArgs = paddingMs > 0
+    ? ["-t", (params.plannedDurationMs! / 1_000).toFixed(3)]
+    : [];
 
   if (narration === "subtitles" || narration === "silent") {
     // No narration audio at all in this mode: silent output (-an, no audio input/map/codec), with
@@ -98,6 +107,7 @@ export function buildComposeArgv(
       ...((narration === "subtitles" || frameFilter) ? ["-vf", [frameFilter, narration === "subtitles" ? burnedSubtitleFilter(srtPath) : undefined].filter((value): value is string => Boolean(value)).join(",")] : []),
       "-map",
       "0:v",
+      ...targetDurationArgs,
       ...buildProfessionalH264Args(),
       "-an",
       sanitizePositionalPath(outputPath),
@@ -135,11 +145,12 @@ export function buildComposeArgv(
     "-map",
     "[aout]",
     ...(includeSubtitles ? ["-map", `${subtitleInputIndex}:s`] : []),
+    ...targetDurationArgs,
     ...buildProfessionalH264Args(),
     "-c:a",
     "aac",
     ...(includeSubtitles ? ["-c:s", "mov_text"] : []),
-    "-shortest",
+    ...(params.plannedDurationMs === undefined ? ["-shortest"] : []),
     sanitizePositionalPath(outputPath),
   ];
 }

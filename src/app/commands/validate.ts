@@ -33,6 +33,7 @@ const TECHNICAL_UX: UxEvaluationInput = {
   professionalismTrust: 1,
   retentionProxy: 1,
 } as const;
+const FRAME_CHECKPOINT_ENDPOINT_LEAD_MS = 100;
 type UxEvidenceStatus = "not-provided" | "ignored-synthetic" | "real";
 export interface ValidateRenderInput {
   readonly paths: GuideoPaths;
@@ -69,7 +70,11 @@ export async function runValidate(
     0,
   );
   const checkpointsMs = [
-    ...new Set([0, Math.floor(plannedDurationMs / 2), Math.max(0, plannedDurationMs - 1)]),
+    ...new Set([
+      0,
+      Math.floor(plannedDurationMs / 2),
+      Math.max(0, plannedDurationMs - FRAME_CHECKPOINT_ENDPOINT_LEAD_MS),
+    ]),
   ];
   const physical = await validatePhysicalRender({
     request: {

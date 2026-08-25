@@ -14,7 +14,10 @@ afterEach(async () => {
   if (scratchDir) await rm(scratchDir, { recursive: true, force: true });
 });
 
-function validationContainer(metadata: MediaProbeResult): Container {
+function validationContainer(
+  metadata: MediaProbeResult,
+  onCheckpoints?: (checkpointsMs: readonly number[]) => void,
+): Container {
   return {
     mediaProbe: { probe: async () => metadata },
     usageLedger: {
@@ -26,14 +29,17 @@ function validationContainer(metadata: MediaProbeResult): Container {
       snapshot: async () => ({ spent: 0, reserved: 0 }),
     },
     frameProbe: {
-      capture: async (_videoPath: string, checkpointsMs: readonly number[]) =>
-        checkpointsMs.map((atMs) => ({ atMs, bytes: 42, sha256: "fixture-frame" })),
+      capture: async (_videoPath: string, checkpointsMs: readonly number[]) => {
+        onCheckpoints?.(checkpointsMs);
+        return checkpointsMs.map((atMs) => ({ atMs, bytes: 42, sha256: "fixture-frame" }));
+      },
     } satisfies FrameCheckpointProbe,
   } as unknown as Container;
 }
 
 async function writeRenderInputs(
   cwd: string,
+  durationMs = 1_000,
 ): Promise<{ readonly paths: ReturnType<typeof projectPaths>; readonly uxPath: string }> {
   const paths = projectPaths({ project: "acme", cwd });
   await mkdir(join(paths.guideoDir, "output"), { recursive: true });
@@ -45,7 +51,7 @@ async function writeRenderInputs(
   await writeFile(
     paths.scriptPath,
     JSON.stringify({
-      segments: [{ id: "intro", text: "Hello", timing: { startMs: 0, durationMs: 1_000 } }],
+      segments: [{ id: "intro", text: "Hello", timing: { startMs: 0, durationMs } }],
     }),
     { encoding: "utf8", flush: true },
   );
@@ -162,6 +168,42 @@ describe("guideo validate", () => {
     await expect(
       readFile(join(paths.guideoDir, "validation-report.json"), "utf8"),
     ).resolves.toContain('"status": "failed"');
+  });
+
+  it("samples a valid 19-second fixture before the endpoint with non-empty frames", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-validate-final-checkpoint-"));
+    const { paths } = await writeRenderInputs(scratchDir, 19_000);
+    let requestedCheckpoints: readonly number[] = [];
+    const errors: string[] = [];
+
+    const code = await runCli(
+      ["validate", "--project", "acme", "--profile", "youtube", "--narration", "both"],
+      validationContainer(
+        {
+          durationMs: 19_000,
+          hasVideo: true,
+          hasAudio: true,
+          videoCodec: "h264",
+          width: 1920,
+          height: 1080,
+        },
+        (checkpointsMs) => {
+          requestedCheckpoints = checkpointsMs;
+        },
+      ),
+      scratchDir,
+      () => undefined,
+      (line) => errors.push(line),
+    );
+
+    expect(code).toBe(0);
+    expect(errors).toEqual([]);
+    expect(requestedCheckpoints).toEqual([0, 9_500, 18_900]);
+    expect(requestedCheckpoints.at(-1)).toBeLessThan(19_000);
+    const report = JSON.parse(await readFile(paths.validationReportPath, "utf8"));
+    expect(report.physical.checkpoints).toEqual(
+      expect.arrayContaining([expect.objectContaining({ atMs: 18_900, bytes: 42 })]),
+    );
   });
 });
 

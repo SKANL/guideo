@@ -11,6 +11,7 @@ import {
   WebRecordingEngine,
 } from "../../../src/adapters/recording/web-recording-engine.js";
 import { DEFAULT_LOGIN_CONFIG } from "../../../src/adapters/target/login.js";
+import { sha256 } from "../../../src/domain/artifacts/canonical.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { review } from "../../../src/domain/review-gate.js";
 
@@ -36,6 +37,7 @@ function fakeElement(box: { x: number; y: number; width: number; height: number 
 function fakeCaptureHarness(
   options: {
     staysOnLogin?: boolean;
+    postLoginUrl?: string;
     // Test-only hook (click self-heal): selector -> URL the click "navigates" to, on top of the
     // default submit-selector-only URL transition.
     clickNavigatesTo?: Record<string, string>;
@@ -62,7 +64,7 @@ function fakeCaptureHarness(
     }
     log.push(`click:${selector}`);
     if (selector === DEFAULT_LOGIN_CONFIG.submitSelector && !options.staysOnLogin) {
-      currentUrl = LOGGED_IN_URL;
+      currentUrl = options.postLoginUrl ?? LOGGED_IN_URL;
     }
     const navigateTo = options.clickNavigatesTo?.[selector];
     if (navigateTo) currentUrl = navigateTo;
@@ -847,6 +849,30 @@ describe("WebRecordingEngine", () => {
   });
 
   describe("semantic locator evidence and capture recovery", () => {
+    it("skips a malformed fallback locator and uses the uniquely matched reviewed selector", async () => {
+      const harness = fakeCaptureHarness();
+      harness.$$.mockImplementation(async (selector: string) => {
+        if (selector === "[data-testid=save:visible") {
+          throw new DOMException("not a valid selector", "SyntaxError");
+        }
+        if (selector === "#save:visible") {
+          return [fakeElement({ x: 1, y: 1, width: 10, height: 10 })];
+        }
+        return [];
+      });
+      const storyboard = parseStoryboard({ steps: [{
+        action: "click", selector: "#save", narrationSegmentId: "seg-1",
+        evidence: { locatorCandidates: ["[data-testid=save", "#save"] },
+      }] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+
+      await engine.capture(approved);
+
+      expect(harness.click).toHaveBeenCalledWith("#save:visible");
+    });
+
     it("fails closed and quarantines capture on an ambiguous semantic locator", async () => {
       const harness = fakeCaptureHarness();
       harness.$$.mockResolvedValueOnce([
@@ -871,11 +897,28 @@ describe("WebRecordingEngine", () => {
       expect(harness.click).toHaveBeenCalledTimes(1); // login only
     });
 
+    it("accepts a URL fingerprint for the current normalized page URL", async () => {
+      const harness = fakeCaptureHarness({
+        postLoginUrl: `${LOGGED_IN_URL}?tab=overview#summary`,
+      });
+      const storyboard = parseStoryboard({ steps: [{
+        action: "click", selector: "#save", narrationSegmentId: "seg-1",
+        evidence: { urlFingerprint: sha256({ url: LOGGED_IN_URL }) },
+      }] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+
+      await engine.capture(approved);
+
+      expect(harness.click).toHaveBeenCalledWith("#save:visible");
+    });
+
     it("rejects a stale URL fingerprint before executing the required step", async () => {
       const harness = fakeCaptureHarness();
       const storyboard = parseStoryboard({ steps: [{
         action: "click", selector: "#save", narrationSegmentId: "seg-1",
-        evidence: { urlFingerprint: "stale" },
+        evidence: { urlFingerprint: sha256({ url: "https://target.example.com/settings" }) },
       }] });
       const approved = review(storyboard, { kind: "approved" });
       if (!approved) throw new Error("expected approval");
@@ -885,6 +928,21 @@ describe("WebRecordingEngine", () => {
         diagnostic: expect.objectContaining({ kind: "stale-fingerprint", phase: "precondition" }),
       });
       expect(harness.click).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves legacy required steps that have no URL fingerprint", async () => {
+      const harness = fakeCaptureHarness();
+      const storyboard = parseStoryboard({ steps: [{
+        action: "click", selector: "#save", narrationSegmentId: "seg-1",
+        evidence: { locatorCandidates: ["#save"] },
+      }] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+      const engine = new WebRecordingEngine(harness.launcher, new SeededRandom(1));
+
+      await engine.capture(approved);
+
+      expect(harness.click).toHaveBeenCalledWith("#save:visible");
     });
 
     it("rejects a required step whose reviewed postcondition does not hold", async () => {
@@ -919,6 +977,26 @@ describe("WebRecordingEngine", () => {
       expect(clip.captureEvidence?.resume?.nextStepIndex).toBe(1);
       expect(clip.captureEvidence?.traces).toHaveLength(2);
       expect(clip.captureEvidence?.screenshots).toEqual(["/tmp/step.png", "/tmp/step.png"]);
+    });
+
+    it("records Patchright's PNG byte screenshots after every completed action", async () => {
+      const harness = fakeCaptureHarness();
+      (harness.page as PatchrightCapturePage & { screenshot?: () => Promise<Uint8Array> }).screenshot =
+        vi.fn(async () => new Uint8Array([137, 80, 78, 71]));
+      const storyboard = parseStoryboard({ steps: [
+        { action: "hover", selector: "#menu", narrationSegmentId: "seg-1" },
+        { action: "click", selector: "#save", narrationSegmentId: "seg-1" },
+      ] });
+      const approved = review(storyboard, { kind: "approved" });
+      if (!approved) throw new Error("expected approval");
+
+      const clip = await new WebRecordingEngine(harness.launcher, new SeededRandom(1)).capture(approved);
+
+      expect(clip.captureEvidence?.traces.map((trace) => trace.action)).toEqual(["hover", "click"]);
+      expect(clip.captureEvidence?.screenshots).toEqual([
+        "data:image/png;base64,iVBORw==",
+        "data:image/png;base64,iVBORw==",
+      ]);
     });
   });
 

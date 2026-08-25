@@ -1,6 +1,7 @@
 import type { Brief } from "../models/brief.js";
 import type { Script } from "../models/script.js";
 import type { Storyboard } from "../models/storyboard.js";
+import { assertStoryboardActionCoverage } from "./storyboard-provenance.js";
 import type { ScriptGen } from "../ports/script-gen.js";
 import type { Target } from "../ports/target.js";
 import { queryRoutes } from "./flow-graph-query.js";
@@ -16,5 +17,7 @@ export async function plan(
 ): Promise<{ script: Script; storyboard: Storyboard }> {
   const graph = await target.discover();
   const routes = queryRoutes(graph, brief);
-  return scriptGen.generate(brief, routes);
+  const generated = await scriptGen.generate(brief, routes);
+  assertStoryboardActionCoverage(generated.storyboard, routes, brief);
+  return generated;
 }

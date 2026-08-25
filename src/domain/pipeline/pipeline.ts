@@ -309,6 +309,9 @@ class ComposeStage implements PipelineStage {
     const rawClip = requireClip(ctx, this.name);
     const finalVideo = await this.profile.compose({
       rawClip,
+      plannedDurationMs: Math.max(
+        ...ctx.script.segments.map((segment) => segment.timing.startMs + segment.timing.durationMs),
+      ),
       audioTracks: ctx.audioTracks,
       subtitles: ctx.subtitles,
       outputPath: ctx.outputPath,

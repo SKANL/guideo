@@ -49,6 +49,50 @@ export type {
 // definitions now live in ./login.js, shared with capture's login.
 export { readTargetEnvOrThrow };
 
+// CSS.escape is exposed by browsers but not by Node, where discovery tests and the CLI execute.
+// Keep the fallback aligned with the CSSOM identifier serialization algorithm so selector evidence
+// remains replayable even when an element id contains punctuation (e.g. SauceDemo product ids).
+export function escapeCssIdentifier(value: string): string {
+  const nativeEscape = (globalThis as typeof globalThis & {
+    CSS?: { escape?: (identifier: string) => string };
+  }).CSS?.escape;
+  if (typeof nativeEscape === "function") return nativeEscape(value);
+
+  let escaped = "";
+  for (let index = 0; index < value.length; index++) {
+    const codeUnit = value.charCodeAt(index);
+    const character = value[index]!;
+    if (codeUnit === 0x0000) {
+      escaped += "\uFFFD";
+    } else if (
+      (codeUnit >= 0x0001 && codeUnit <= 0x001f) ||
+      codeUnit === 0x007f ||
+      (index === 0 && codeUnit >= 0x0030 && codeUnit <= 0x0039) ||
+      (index === 1 && codeUnit >= 0x0030 && codeUnit <= 0x0039 && value.charCodeAt(0) === 0x002d)
+    ) {
+      escaped += `\\${codeUnit.toString(16)} `;
+    } else if (index === 0 && codeUnit === 0x002d && value.length === 1) {
+      escaped += "\\-";
+    } else if (
+      codeUnit >= 0x0080 ||
+      codeUnit === 0x002d ||
+      codeUnit === 0x005f ||
+      (codeUnit >= 0x0030 && codeUnit <= 0x0039) ||
+      (codeUnit >= 0x0041 && codeUnit <= 0x005a) ||
+      (codeUnit >= 0x0061 && codeUnit <= 0x007a)
+    ) {
+      escaped += character;
+    } else {
+      escaped += `\\${character}`;
+    }
+  }
+  return escaped;
+}
+
+function idSelector(id: string): string {
+  return `#${escapeCssIdentifier(id)}`;
+}
+
 // Robust-selector priority for a discovered nav item: data-testid > id > raw href > visible text
 // > tag fallback. CSS/DOM-based only — NEVER `role=` (patchright, the undetected Playwright fork
 // used for capture/replay, DISABLES the accessibility tree, so `getByRole`/`role=` selectors match
@@ -60,7 +104,7 @@ export async function buildRobustSelector(link: PatchrightElementHandle): Promis
   if (testId) return `[data-testid="${testId}"]`;
 
   const id = await link.getAttribute("id");
-  if (id) return `#${id}`;
+  if (id) return idSelector(id);
 
   const href = await link.getAttribute("href");
   if (href) return `a[href="${href}"]`;
@@ -72,6 +116,55 @@ export async function buildRobustSelector(link: PatchrightElementHandle): Promis
   // ponytail: no identifying attribute found — last-resort tag selector. An anchor with an empty
   // (but present) href attribute still gets "a"; anything else falls back to "button".
   return href !== null ? "a" : "button";
+}
+
+async function buildActionSelector(control: PatchrightElementHandle): Promise<string> {
+  const [testId, id, name, role, href, text] = await Promise.all([
+    control.getAttribute("data-testid"),
+    control.getAttribute("id"),
+    control.getAttribute("name"),
+    control.getAttribute("role"),
+    control.getAttribute("href"),
+    control.textContent(),
+  ]);
+  if (testId) return `[data-testid="${testId}"]`;
+  if (id) return idSelector(id);
+  if (name) return `[name="${name}"]`;
+  if (role) return `[role="${role}"]`;
+  if (href) return `a[href="${href}"]`;
+  if (text?.trim()) return `text="${text.trim()}"`;
+  return "button";
+}
+
+interface SelectorEntry {
+  readonly key: string;
+  readonly selector: string;
+  readonly source: "action" | "nav";
+}
+
+function mergeSelectors(entries: readonly SelectorEntry[]): Record<string, string> {
+  const uniqueBySelector = new Map<string, SelectorEntry>();
+  for (const entry of [...entries].sort((left, right) =>
+    compareStableSelector(left.selector, right.selector)
+    || (left.source === "nav" ? -1 : 1) - (right.source === "nav" ? -1 : 1)
+    || compareStableSelector(left.key, right.key),
+  )) {
+    if (!uniqueBySelector.has(entry.selector)) uniqueBySelector.set(entry.selector, entry);
+  }
+  const usedKeys = new Set<string>();
+  const selected = [...uniqueBySelector.values()]
+    .sort((left, right) => compareStableSelector(left.key, right.key) || compareStableSelector(left.selector, right.selector));
+  return Object.fromEntries(selected.map((entry) => {
+    let key = entry.key;
+    let index = 2;
+    while (usedKeys.has(key)) key = `${entry.key}-${index++}`;
+    usedKeys.add(key);
+    return [key, entry.selector];
+  }));
+}
+
+function compareStableSelector(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function isSameOrigin(url: string, baseUrl: string): boolean {
@@ -184,6 +277,9 @@ export class UrlCredsTarget implements Target {
   constructor(launcher?: BrowserLauncher, config: Partial<DiscoveryConfig> = {}) {
     this.injectedLauncher = launcher;
     this.config = { ...DEFAULT_DISCOVERY_CONFIG, ...config };
+    if (!Number.isInteger(this.config.maxActionableControls) || this.config.maxActionableControls < 1) {
+      throw new Error("maxActionableControls must be a positive integer");
+    }
   }
 
   async getDiscoveryFingerprint(): Promise<DiscoveryFingerprint> {
@@ -282,7 +378,7 @@ export class UrlCredsTarget implements Target {
   private async findNavItemsWithRetry(
     page: PatchrightPage,
     currentUrl: string,
-  ): Promise<PatchrightElementHandle[]> {
+  ): Promise<PatchrightElementHandle[] | undefined> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.config.navQueryRetries; attempt++) {
       try {
@@ -305,7 +401,17 @@ export class UrlCredsTarget implements Target {
       `UrlCredsTarget: giving up on nav-item discovery for ${currentUrl} after ` +
         `${this.config.navQueryRetries + 1} attempt(s) — ${reason}`,
     );
-    return [];
+    return undefined;
+  }
+
+  private async findActionControls(page: PatchrightPage): Promise<PatchrightElementHandle[]> {
+    try {
+      return await page.$$(this.config.actionableControlSelector);
+    } catch (error) {
+      // Optional enrichment must never undo the already bounded, retry-protected route crawl.
+      if (isExecutionContextDestroyedError(error)) return [];
+      throw error;
+    }
   }
 
   private async crawl(page: PatchrightPage, startUrl: string): Promise<FlowGraph> {
@@ -336,9 +442,9 @@ export class UrlCredsTarget implements Target {
       // click-everything crawler. Upgrade path: a relevance-ranked frontier or an explicit route
       // list once discovery needs to cover more than a primary nav's worth of an app.
       const navItems = await this.findNavItemsWithRetry(page, currentUrl);
-      const selectors: Record<string, string> = {};
+      const navSelectorEntries: SelectorEntry[] = [];
 
-      for (const item of navItems) {
+      for (const item of navItems ?? []) {
         const href = await item.getAttribute("href");
         const selector = await buildRobustSelector(item);
         const text = (await item.textContent())?.trim();
@@ -371,7 +477,7 @@ export class UrlCredsTarget implements Target {
           await page.goBack();
         }
 
-        selectors[slugify(text || href || targetUrl)] = selector;
+        navSelectorEntries.push({ key: slugify(text || href || targetUrl), selector, source: "nav" });
         const targetId = normalizeUrl(targetUrl);
         edges.push({ from: nodeId, to: targetId, action: `click ${selector}` });
         const evidence = await targetEvidenceFromDom(item, selector, targetId, href, text);
@@ -382,6 +488,28 @@ export class UrlCredsTarget implements Target {
           queue.push(targetUrl);
         }
       }
+
+      // Action evidence is deliberately read-only: unlike route controls above, no action
+      // candidate is clicked or used to expand the crawl frontier.
+      const actionSelectorEntries = (await Promise.all(
+        (navItems === undefined ? [] : await this.findActionControls(page)).map(async (control) => {
+          const [selector, text, name, testId, id] = await Promise.all([
+            buildActionSelector(control),
+            control.textContent(),
+            control.getAttribute("name"),
+            control.getAttribute("data-testid"),
+            control.getAttribute("id"),
+          ]);
+          return {
+            key: slugify(text?.trim() || name || testId || id || selector),
+            selector,
+            source: "action" as const,
+          };
+        }),
+      ))
+        .sort((left, right) => compareStableSelector(left.selector, right.selector) || compareStableSelector(left.key, right.key))
+        .slice(0, this.config.maxActionableControls);
+      const selectors = mergeSelectors([...navSelectorEntries, ...actionSelectorEntries]);
 
       const entryEvidence = [...(incomingEvidence.get(nodeId) ?? [])]
         .sort((left, right) => left.selector.localeCompare(right.selector) || sha256(left).localeCompare(sha256(right)))[0];

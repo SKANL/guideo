@@ -14,7 +14,8 @@ const graph = parseFlowGraph({
       feature: "invite",
       useCase: "invite a teammate",
       preconditions: [],
-      selectors: {},
+      selectors: { invite: "#invite" },
+      locatorEvidence: { candidates: ["#invite"] },
     },
   ],
   edges: [],
@@ -42,7 +43,9 @@ class FakeScriptGen implements ScriptGen {
           },
         ],
       }),
-      storyboard: parseStoryboard({ steps: [{ action: "pause", narrationSegmentId: "seg-1" }] }),
+      storyboard: parseStoryboard({
+        steps: [{ action: "click", selector: "#invite", narrationSegmentId: "seg-1" }],
+      }),
     };
   }
 }

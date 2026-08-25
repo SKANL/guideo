@@ -19,4 +19,9 @@ describe("CONVERSATIONAL_NO_AI_TELLS_PROMPT — effect-proposal guidance (effect
     expect(CONVERSATIONAL_NO_AI_TELLS_PROMPT.toLowerCase()).toContain("only use selectors");
     expect(CONVERSATIONAL_NO_AI_TELLS_PROMPT.toLowerCase()).toContain("never invent");
   });
+
+  it("requires an executable action for interactive briefs when Discover has selector evidence", () => {
+    expect(CONVERSATIONAL_NO_AI_TELLS_PROMPT).toMatch(/MUST include at least one executable action/i);
+    expect(CONVERSATIONAL_NO_AI_TELLS_PROMPT).toMatch(/pause-only storyboard/i);
+  });
 });

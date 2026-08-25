@@ -17,7 +17,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       const fragment = filterBuilderRegistry["zoom-in"]?.(
         effect,
         gate,
-        null,
+        region,
         "[0:v]",
         "[v1]",
         "e1",
@@ -30,7 +30,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       expect(fragment).toContain("[e1_base][e1_zoom]overlay=0:0:enable='between(t,1.5,4)'[v1]");
     });
 
-    it("zoom-in: with no region, centers on the frame (iw/2, ih/2)", () => {
+    it("zoom-in: with no region, is a no-op", () => {
       const effect: Effect = { type: "zoom-in", params: {} };
 
       const fragment = filterBuilderRegistry["zoom-in"]?.(
@@ -42,8 +42,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
         "e1",
       );
 
-      expect(fragment).toContain("x='iw/2-");
-      expect(fragment).toContain("y='ih/2-");
+      expect(fragment).toBeNull();
     });
 
     it("zoom-in: with a resolved region, centers on the region's center instead of the frame", () => {
@@ -59,10 +58,8 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       );
 
       // center = x + w/2 = 120, y + h/2 = 75
-      expect(fragment).toContain("x='120-");
-      expect(fragment).toContain("y='75-");
-      expect(fragment).not.toContain("iw/2");
-      expect(fragment).not.toContain("ih/2");
+      expect(fragment).toContain("x='max(0,min(120-");
+      expect(fragment).toContain("y='max(0,min(75-");
     });
 
     it("zoom-in: bounds an explicit params.level override to the professional maximum", () => {
@@ -71,7 +68,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       const fragment = filterBuilderRegistry["zoom-in"]?.(
         effect,
         gate,
-        null,
+        region,
         "[0:v]",
         "[v1]",
         "e1",
@@ -86,7 +83,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       const fragment = filterBuilderRegistry["zoom-out"]?.(
         effect,
         gate,
-        null,
+        region,
         "[0:v]",
         "[v1]",
         "e1",
@@ -94,7 +91,7 @@ describe("filterBuilderRegistry — pure effect -> ffmpeg filter_complex fragmen
       const zoomInFragment = filterBuilderRegistry["zoom-in"]?.(
         effect,
         gate,
-        null,
+        region,
         "[0:v]",
         "[v1]",
         "e1",
