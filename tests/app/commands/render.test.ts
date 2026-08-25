@@ -104,6 +104,14 @@ class FakeVoiceGen implements VoiceGen {
   }
 }
 
+class RejectingPreflightVoiceGen extends FakeVoiceGen {
+  preflightCalls = 0;
+  async preflight(): Promise<void> {
+    this.preflightCalls += 1;
+    throw new Error("ElevenLabs preflight failed: configured voice is unavailable");
+  }
+}
+
 class FakeMediaProbe implements MediaProbe {
   constructor(private readonly result: MediaProbeResult) {}
   async probe(): Promise<MediaProbeResult> { return this.result; }
@@ -149,7 +157,8 @@ class TrackingLedger implements UsageLedger {
   commits = 0;
   releases = 0;
   voiceReservations = 0;
-  async reserve(request: BudgetRequest): Promise<Reservation> { if (request.operation === "voice") this.voiceReservations += 1; return { id: `${request.operation}-1`, request }; }
+  renderReservations = 0;
+  async reserve(request: BudgetRequest): Promise<Reservation> { if (request.operation === "voice") this.voiceReservations += 1; if (request.operation === "render") this.renderReservations += 1; return { id: `${request.operation}-1`, request }; }
   async commit(_id: string, _actual: UsageActual): Promise<void> { this.commits += 1; }
   async release(_id: string, _reason: string): Promise<void> { this.releases += 1; }
   async snapshot(): Promise<UsageSnapshot> { return { spent: 0, reserved: 0 }; }
@@ -212,6 +221,33 @@ describe("runRender", () => {
     expect(engine.captureCalls).toBe(0);
     expect(voice.synthesizeCalls).toBe(0);
     expect(profile.composeCalls).toBe(0);
+  });
+
+  it("preflights voice before any capture or usage reservation", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-render-preflight-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    await writeApprovedFixtures(paths);
+    const engine = new FakeRecordingEngine();
+    const voice = new RejectingPreflightVoiceGen();
+    const ledger = new TrackingLedger();
+
+    await expect(runRender({
+      recordingEngine: engine,
+      preRollTrimmer: new FakePreRollTrimmer(),
+      privacyCutter: new FakePrivacyCutter(),
+      effectsEngine: new FakeEffectsEngine(),
+      sceneSplitter: new FakeSceneSplitter(),
+      sceneAssembler: new FakeSceneAssembler(),
+      voiceGen: voice,
+      platformProfile: new FakePlatformProfile(),
+      usageLedger: ledger,
+    }, true, paths, "voice")).rejects.toThrow(/ElevenLabs preflight failed/);
+
+    expect(voice.preflightCalls).toBe(1);
+    expect(voice.synthesizeCalls).toBe(0);
+    expect(engine.captureCalls).toBe(0);
+    expect(ledger.voiceReservations).toBe(0);
+    expect(ledger.renderReservations).toBe(0);
   });
 
   it("with --approve, mints the ApprovedStoryboard and renders exactly once through each adapter", async () => {

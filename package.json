@@ -18,7 +18,8 @@
     "lint": "biome check .",
     "guideo": "node --env-file-if-exists=.env --import tsx src/app/cli.ts",
     "test:physical-render:matrix": "vitest run tests/app/validation/physical-render-validator.integration.test.ts",
-    "lint:physical-render": "biome check src/app/validation/physical-render-matrix.ts src/app/validation/physical-render-validator.ts tests/app/validation/physical-render-matrix.test.ts tests/app/validation/physical-render-validator.integration.test.ts"
+    "lint:physical-render": "biome check src/app/validation/physical-render-matrix.ts src/app/validation/physical-render-validator.ts tests/app/validation/physical-render-matrix.test.ts tests/app/validation/physical-render-validator.integration.test.ts",
+    "benchmark:ci": "node scripts/benchmark-ci.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",

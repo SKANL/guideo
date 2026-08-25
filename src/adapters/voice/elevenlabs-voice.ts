@@ -49,6 +49,9 @@ export interface ElevenLabsSdkClient {
       request: ElevenLabsTextToSpeechRequest,
     ): Promise<unknown>;
   };
+  readonly voices?: {
+    get(voiceId: string): Promise<{ readonly voiceId?: unknown; readonly voice_id?: unknown }>;
+  };
 }
 
 export interface ElevenLabsAlignment {
@@ -97,13 +100,41 @@ export class ElevenLabsVoice implements VoiceGen {
     return (await this.synthesizeResult(segment)).audio;
   }
 
+  /**
+   * Verifies the selected voice through the already-configured client before render reserves
+   * budget or starts browser capture. The provider lookup does not synthesize audio.
+   */
+  async preflight(): Promise<void> {
+    const voiceId = this.voiceId();
+    this.assertConfiguration(voiceId);
+    const client = this.injectedClient ?? this.getOrCreateDefaultClient();
+    if (!client.voices?.get) {
+      throw new Error("ElevenLabs preflight cannot verify the configured voice: the client does not expose voices.get(). Update @elevenlabs/elevenlabs-js or provide a compatible client.");
+    }
+    try {
+      const response = await client.voices.get(voiceId);
+      const responseVoiceId = typeof response?.voiceId === "string"
+        ? response.voiceId
+        : typeof response?.voice_id === "string"
+          ? response.voice_id
+          : undefined;
+      if (responseVoiceId !== voiceId) {
+        throw new Error(`configured voice "${voiceId}" is not available to this ElevenLabs account`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("configured voice")) throw error;
+      throw new Error(`ElevenLabs preflight failed for voice "${voiceId}": ${message}`);
+    }
+  }
+
   private async synthesizeResult(segment: NarrationSegment): Promise<{ audio: Audio; voiceId: string }> {
     const client = this.injectedClient ?? this.getOrCreateDefaultClient();
     const { modelId, outputFormat, stability, similarityBoost, style, useSpeakerBoost, speed } =
       this.calibration;
     // Per-account voice override — free ElevenLabs accounts differ in which voices they may use via
     // API, so let the environment pick one without a code/calibration change.
-    const voiceId = process.env.GUIDEO_VOICE_ID || this.calibration.voiceId;
+    const voiceId = this.voiceId();
 
     let stream: ReadableStream<Uint8Array>;
     let alignment: ElevenLabsAlignment | undefined;
@@ -158,6 +189,16 @@ export class ElevenLabsVoice implements VoiceGen {
 
   estimateUsage(segment: NarrationSegment): UsageEstimate {
     return { unit: "usd-micros", amount: segment.text.length * this.calibration.costPerCharacterMicros };
+  }
+
+  private voiceId(): string {
+    return process.env.GUIDEO_VOICE_ID || this.calibration.voiceId;
+  }
+
+  private assertConfiguration(voiceId: string): void {
+    if (!voiceId.trim()) throw new Error("ElevenLabs preflight requires GUIDEO_VOICE_ID or a non-empty calibrated voiceId");
+    if (!this.calibration.modelId.trim()) throw new Error("ElevenLabs preflight requires a non-empty modelId calibration");
+    if (!this.calibration.outputFormat.trim()) throw new Error("ElevenLabs preflight requires a non-empty outputFormat calibration");
   }
 
   // Lazy: only reads env / constructs the real SDK client the first time synthesize() actually

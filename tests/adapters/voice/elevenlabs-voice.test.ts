@@ -173,6 +173,32 @@ describe("ElevenLabsVoice", () => {
     expect(() => new ElevenLabsVoice()).not.toThrow();
   });
 
+  it("preflights the configured voice through the existing client without synthesizing audio", async () => {
+    const get = vi.fn(async () => ({ voiceId: "preflight-voice", name: "Ready voice" }));
+    const convert = vi.fn(async () => bytesToStream(new Uint8Array(0)));
+    const voice = new ElevenLabsVoice(
+      { textToSpeech: { convert }, voices: { get } },
+      { voiceId: "preflight-voice" },
+    );
+
+    await voice.preflight();
+
+    expect(get).toHaveBeenCalledWith("preflight-voice");
+    expect(convert).not.toHaveBeenCalled();
+  });
+
+  it("makes an invalid provider preflight response actionable", async () => {
+    const voice = new ElevenLabsVoice(
+      {
+        textToSpeech: { convert: async () => bytesToStream(new Uint8Array(0)) },
+        voices: { get: async () => ({ voiceId: "different-voice" }) },
+      },
+      { voiceId: "preflight-voice" },
+    );
+
+    await expect(voice.preflight()).rejects.toThrow(/configured voice .* not available/i);
+  });
+
   it("produces a clear error only when synthesize is attempted without ELEVENLABS_API_KEY set", async () => {
     delete process.env.ELEVENLABS_API_KEY;
     const voice = new ElevenLabsVoice();

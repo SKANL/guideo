@@ -19,6 +19,8 @@ export interface PromotionInput {
   readonly observability?: RenderObservability;
   /** Present only when an operator supplies a deterministic visual baseline. */
   readonly visualBaseline?: VisualBaselineReport;
+  /** Release promotion requires an explicit deterministic visual baseline. */
+  readonly release?: boolean;
   /** Persisted inputs required to evaluate render quality and observability. */
   readonly artifactFailures?: readonly string[];
 }
@@ -51,7 +53,7 @@ export function evaluatePromotion(input: PromotionInput): PromotionReport {
     ...(input.observability.captionOverlapMs > 0 ? [`captions overlap for ${input.observability.captionOverlapMs}ms`] : []),
     ...(input.observability.zoomsWithoutTarget > 0 ? [`${input.observability.zoomsWithoutTarget} zoom effect${input.observability.zoomsWithoutTarget === 1 ? "" : "s"} lacks a target`] : []),
   ];
-  const criticalFailures: PromotionFailure[] = [...quality.failures.map((message) => ({ source: "quality" as const, message })), ...(input.artifactFailures ?? []).map((message) => ({ source: "quality" as const, message })), ...observabilityFailures.map((message) => ({ source: "quality" as const, message })), ...(usage.reserved === 0 ? [] : [{ source: "usage" as const, message: `usage ledger has ${usage.reserved} ${usage.unit} reserved` }]), ...ux.failures.map((message) => ({ source: "ux" as const, message })), ...(input.visualBaseline?.failures.map((message) => ({ source: "visual" as const, message })) ?? [])];
+  const criticalFailures: PromotionFailure[] = [...quality.failures.map((message) => ({ source: "quality" as const, message })), ...(input.artifactFailures ?? []).map((message) => ({ source: "quality" as const, message })), ...observabilityFailures.map((message) => ({ source: "quality" as const, message })), ...(usage.reserved === 0 ? [] : [{ source: "usage" as const, message: `usage ledger has ${usage.reserved} ${usage.unit} reserved` }]), ...ux.failures.map((message) => ({ source: "ux" as const, message })), ...(input.release && input.visualBaseline === undefined ? [{ source: "visual" as const, message: "release promotion requires a visual baseline checkpoint report" }] : []), ...(input.visualBaseline?.failures.map((message) => ({ source: "visual" as const, message })) ?? [])];
   return { status: criticalFailures.length === 0 ? "promoted" : "blocked", criticalFailures, quality, ux, uxEvidenceSource: input.uxEvidenceSource ?? "synthetic-baseline", usage, ...(input.observability === undefined ? {} : { observability: input.observability }), ...(input.visualBaseline === undefined ? {} : { visualBaseline: input.visualBaseline }) };
 }
 

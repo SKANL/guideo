@@ -25,7 +25,7 @@ Usage:
                                                    Plan a script + storyboard, then STOP for review
   guideo render --approve [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>]
                                                    Render the last-planned, approved storyboard
-  guideo validate [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>] [--ux-evidence <path>] [--visual-baseline <checkpoint-report.json>]
+  guideo validate [--project <name>] [--narration <voice|subtitles|both|silent>] [--profile <youtube|shorts|square>] [--ux-evidence <path>] [--visual-baseline <checkpoint-report.json>] [--release]
                                                    Validate one rendered MP4/SRT and write its reports
   guideo validate-matrix [--project <name>]       Validate all rendered profile/narration variants and write a matrix artifact
   guideo --help                                   Show this help
@@ -122,6 +122,7 @@ function parseValidateArgs(args: readonly string[]): {
   renderProfile: import("../domain/models/media.js").RenderProfileName;
   uxEvidencePath?: string;
   visualBaselinePath?: string;
+  release: boolean;
 } {
   const { values } = parseArgs({
     args: [...args],
@@ -131,6 +132,7 @@ function parseValidateArgs(args: readonly string[]): {
       profile: { type: "string" },
       "ux-evidence": { type: "string" },
       "visual-baseline": { type: "string" },
+      release: { type: "boolean" },
     },
     strict: true,
     allowPositionals: false,
@@ -141,6 +143,7 @@ function parseValidateArgs(args: readonly string[]): {
     renderProfile: parseValidateRenderProfile(values.profile),
     ...(values["ux-evidence"] ? { uxEvidencePath: values["ux-evidence"] } : {}),
     ...(values["visual-baseline"] ? { visualBaselinePath: values["visual-baseline"] } : {}),
+    release: values.release ?? false,
   };
 }
 
@@ -187,7 +190,7 @@ export async function runCli(
         return 0;
       }
       case "validate": {
-        const { project, narration, renderProfile, uxEvidencePath, visualBaselinePath } = parseValidateArgs(rest);
+        const { project, narration, renderProfile, uxEvidencePath, visualBaselinePath, release } = parseValidateArgs(rest);
         if (!container.mediaProbe || !container.usageLedger)
           throw new Error("validate requires media probe and usage ledger adapters");
         const paths = projectPaths({ project, cwd, renderProfile, narration });
@@ -203,6 +206,7 @@ export async function runCli(
             profile: renderProfile,
             ...(uxEvidencePath ? { uxEvidencePath } : {}),
             ...(visualBaselinePath ? { visualBaselinePath } : {}),
+            ...(release ? { release: true } : {}),
           },
         );
         print(`Validation report written to ${paths.validationReportPath}`);

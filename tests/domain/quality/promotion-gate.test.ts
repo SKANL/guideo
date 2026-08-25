@@ -53,5 +53,15 @@ describe("promotion gate", () => {
       { source: "visual", message: "frame checkpoint 1500ms differs from visual baseline" },
     ]));
   });
+
+  it("requires a visual baseline only when evaluating a release promotion", () => {
+    const report = evaluatePromotion({ ...input, release: true });
+
+    expect(report.status).toBe("blocked");
+    expect(report.criticalFailures).toContainEqual({
+      source: "visual",
+      message: "release promotion requires a visual baseline checkpoint report",
+    });
+  });
 });
 

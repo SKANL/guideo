@@ -4,6 +4,7 @@ import { parseFlowGraph } from "../../../src/domain/models/flow-graph.js";
 import { parseScript } from "../../../src/domain/models/script.js";
 import { parseStoryboard } from "../../../src/domain/models/storyboard.js";
 import { plan } from "../../../src/domain/pipeline/planning.js";
+import { SceneArtifactCache } from "../../../src/domain/pipeline/scene-artifact-cache.js";
 import type { FlowGraphRoutes, ScriptGen } from "../../../src/domain/ports/script-gen.js";
 import type { Target } from "../../../src/domain/ports/target.js";
 
@@ -62,5 +63,18 @@ describe("plan", () => {
     expect(scriptGen.receivedRoutes[0]?.nodes.map((node) => node.id)).toEqual(["n1"]);
     expect(result.script.segments[0]?.text).toBe("Let's invite a teammate.");
     expect(result.storyboard.steps[0]?.narrationSegmentId).toBe("seg-1");
+  });
+
+  it("reuses an exact ScriptGen result without a second generation call", async () => {
+    const target = new FakeTarget();
+    const scriptGen = new FakeScriptGen();
+    const brief = parseBrief({ idea: "Show how to invite a teammate", targetPlatform: "youtube" });
+    const cache = new SceneArtifactCache();
+
+    await plan(target, brief, scriptGen, cache);
+    await plan(target, brief, scriptGen, cache);
+
+    expect(scriptGen.receivedRoutes).toHaveLength(1);
+    expect(target.discoverCalls).toBe(2);
   });
 });

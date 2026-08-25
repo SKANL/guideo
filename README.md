@@ -51,6 +51,18 @@ npm run guideo -- render --approve
 npm run guideo -- render
 ```
 
+### Release promotion
+
+Create a checkpoint report with a successful validation, then use that immutable report as the
+visual baseline for the release validation. `--release` refuses promotion if `--visual-baseline`
+is omitted or any checkpoint differs; ordinary `validate` remains available for local/unit checks.
+
+```sh
+npm run guideo -- validate --project my-project
+npm run guideo -- validate --project my-project --release \
+  --visual-baseline .guideo/projects/my-project/output/youtube-both.checkpoint-report.json
+```
+
 Artifacts are project-scoped: every command accepts `--project <name>` so multiple targets/briefs
 never collide. `--project` defaults to a slug of `GUIDEO_TARGET_URL`'s host (e.g.
 `camtom-webapp.vercel.app` -> `camtom-webapp-vercel-app`), or `"default"` if that env var is unset.

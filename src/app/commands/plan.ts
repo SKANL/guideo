@@ -9,10 +9,12 @@ import type { Storyboard } from "../../domain/models/storyboard.js";
 import { applyDirectorDefaults, type DirectorConfig } from "../../domain/pipeline/director.js";
 import { queryRoutes } from "../../domain/pipeline/flow-graph-query.js";
 import { plan } from "../../domain/pipeline/planning.js";
+import { deriveStageArtifactKey, SceneArtifactCache } from "../../domain/pipeline/scene-artifact-cache.js";
 import { bindStoryboardProvenance } from "../../domain/pipeline/storyboard-provenance.js";
 import type { ScriptGen } from "../../domain/ports/script-gen.js";
 import type { Target } from "../../domain/ports/target.js";
 import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
+import type { ArtifactStore } from "../../domain/ports/artifact-store.js";
 import { type GuideoPaths, projectPaths } from "../paths.js";
 
 // Loads the flow graph that `guideo discover` persisted. plan does NOT re-run discovery — the
@@ -37,7 +39,7 @@ function loadPersistedFlowGraph(flowGraphPath: string): FlowGraph {
 // it's written for the REVIEW gate — `enabled: false` turns it off entirely (default ON); the rest
 // merges over DEFAULT_DIRECTOR_CONFIG.
 export async function runPlan(
-  container: { readonly scriptGen: ScriptGen; readonly usageLedger?: UsageLedger },
+  container: { readonly scriptGen: ScriptGen; readonly usageLedger?: UsageLedger; readonly artifactStore?: ArtifactStore },
   brief: Brief,
   paths: GuideoPaths = projectPaths({ project: "default" }),
   directorOptions: { readonly enabled?: boolean } & Partial<DirectorConfig> = {},
@@ -45,12 +47,19 @@ export async function runPlan(
   const graph = loadPersistedFlowGraph(paths.flowGraphPath);
   // A cached-graph Target: plan() consumes the already-discovered graph, no live browser here.
   const cachedTarget: Target = { discover: async () => graph };
+  const cache = new SceneArtifactCache(container.artifactStore);
   const reservation = await container.usageLedger?.reserve({ operation: "plan", estimated: 1 });
   let planned: { script: Script; storyboard: Storyboard };
   let storyboard: Storyboard;
   try {
-    planned = await plan(cachedTarget, brief, container.scriptGen);
-    storyboard = bindStoryboardProvenance(planned.storyboard, queryRoutes(graph, brief));
+    planned = await plan(cachedTarget, brief, container.scriptGen, cache);
+    const baseStoryboard = bindStoryboardProvenance(planned.storyboard, queryRoutes(graph, brief));
+    const { enabled = true, ...directorConfig } = directorOptions;
+    const directorKey = deriveStageArtifactKey("director", { storyboard: baseStoryboard, script: planned.script, enabled, directorConfig });
+    storyboard = await cache.getOrLoadValue(directorKey, isStoryboard) ?? (enabled
+      ? applyDirectorDefaults(baseStoryboard, planned.script, { motionEmphasisEnabled: true, ...directorConfig })
+      : baseStoryboard);
+    await cache.putValuePersistent(directorKey, storyboard);
     if (reservation)
       await container.usageLedger?.commit(reservation.id, { cost: 1, cached: false });
   } catch (error) {
@@ -58,10 +67,6 @@ export async function runPlan(
     throw error;
   }
   const { script } = planned;
-  const { enabled = true, ...directorConfig } = directorOptions;
-  storyboard = enabled
-    ? applyDirectorDefaults(storyboard, script, { motionEmphasisEnabled: true, ...directorConfig })
-    : storyboard;
   await mkdir(paths.guideoDir, { recursive: true });
   await writeFile(paths.scriptPath, JSON.stringify(script, null, 2), "utf8");
   await writeFile(paths.storyboardPath, JSON.stringify(storyboard, null, 2), "utf8");
@@ -79,4 +84,8 @@ export async function runPlan(
     "utf8",
   );
   return { script, storyboard };
+}
+
+function isStoryboard(value: unknown): value is Storyboard {
+  return typeof value === "object" && value !== null && Array.isArray((value as { steps?: unknown }).steps);
 }

@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { renderProfileViewport, type Audio, type FinalVideo, type RawClip, type RenderProfileName, type Subtitle } from "../models/media.js";
 import type { NarrationMode } from "../models/narration-mode.js";
 import type { Script } from "../models/script.js";
@@ -12,7 +13,7 @@ import type { SceneClip, SceneSplitter } from "../ports/scene-splitter.js";
 import type { VoiceGen } from "../ports/voice-gen.js";
 import type { UsageLedger } from "../ports/usage-ledger.js";
 import type { UsageEstimate, UsageResult } from "../ports/usage-ledger.js";
-import { deriveSceneArtifactKey, type SceneArtifactCache } from "./scene-artifact-cache.js";
+import { deriveSceneArtifactKey, deriveStageArtifactKey, type SceneArtifactCache } from "./scene-artifact-cache.js";
 import { captionLayoutHintsFromResolvedEffects, deriveSubtitles } from "./subtitles.js";
 
 // trimPreRoll (privacy/alignment fix, design doc section C, sub-project 5a): whether to cut the
@@ -74,8 +75,10 @@ export interface RenderContext {
   // Set only by the terminal (compose) stage — render() reads this back out after folding every
   // stage, since PipelineStage.run() must always return a RenderContext, never a bare FinalVideo.
   readonly finalVideo: FinalVideo | null;
+  /** Wall-clock duration for each completed pipeline stage, keyed by its stable stage name. */
+  readonly stageTimings: Readonly<Record<string, number>>;
 }
-export interface RenderResult { readonly video: FinalVideo; readonly context: RenderContext; }
+export interface RenderResult { readonly video: FinalVideo; readonly context: RenderContext; readonly stageTimings: Readonly<Record<string, number>>; }
 
 // PipelineStage: one composable render step. `name` identifies it for logging/tests (e.g.
 // asserting stage order); run() takes the current context and returns the next one.
@@ -109,7 +112,7 @@ function requireClip(ctx: RenderContext, stageName: string): RawClip {
 // identically regardless of where the durations came from.
 class SynthesizeVoiceStage implements PipelineStage {
   readonly name = "synthesize-voice";
-  constructor(private readonly voice: VoiceGen, private readonly ledger?: UsageLedger) {}
+  constructor(private readonly voice: VoiceGen, private readonly ledger?: UsageLedger, private readonly cache?: SceneArtifactCache) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
     if (ctx.narration === "subtitles" || ctx.narration === "silent") {
       const segmentDurationsMs = new Map(
@@ -119,6 +122,9 @@ class SynthesizeVoiceStage implements PipelineStage {
     }
     const audioTracks: Audio[] = [];
     for (const segment of ctx.script.segments) {
+      const key = deriveStageArtifactKey("voice", { segment });
+      const cached = await this.cache?.getOrLoadValue(key, isAudio);
+      if (cached) { audioTracks.push(cached); continue; }
       const usageVoice = this.voice as VoiceGen & {
         estimateUsage?(segment: Script["segments"][number]): UsageEstimate;
         synthesizeWithUsage?(segment: Script["segments"][number]): Promise<{ audio: Audio; usage: UsageResult }>;
@@ -129,6 +135,7 @@ class SynthesizeVoiceStage implements PipelineStage {
         const result = usageVoice.synthesizeWithUsage && estimate.amount > 0 ? await usageVoice.synthesizeWithUsage(segment) : { audio: await this.voice.synthesize(segment), usage: { unit: "usd-micros" as const, amount: 0, cache: "miss" as const, provider: "unknown" } };
         const audio = result.audio;
         if (reservation) await this.ledger!.commit(reservation.id, result.usage);
+        await this.cache?.putValuePersistent(key, audio);
         audioTracks.push(audio);
       } catch (error) {
         if (reservation) await this.ledger!.release(reservation.id, error instanceof Error ? error.message : String(error));
@@ -144,9 +151,13 @@ class SynthesizeVoiceStage implements PipelineStage {
 
 class CaptureStage implements PipelineStage {
   readonly name = "capture";
-  constructor(private readonly engine: RecordingEngine) {}
+  constructor(private readonly engine: RecordingEngine, private readonly cache?: SceneArtifactCache) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
+    const key = deriveStageArtifactKey("capture", { approved: ctx.approved, segmentDurationsMs: [...ctx.segmentDurationsMs] });
+    const cached = await this.cache?.getOrLoadValue(key, isRawClip);
+    if (cached) return { ...ctx, rawClip: cached };
     const rawClip = await this.engine.capture(ctx.approved, ctx.segmentDurationsMs);
+    await this.cache?.putValuePersistent(key, rawClip);
     return { ...ctx, rawClip };
   }
 }
@@ -304,9 +315,12 @@ class DeriveSubtitlesStage implements PipelineStage {
 // subtitles, or burn them into a silent video — see platform-profile.ts's ComposeParams.
 class ComposeStage implements PipelineStage {
   readonly name = "compose";
-  constructor(private readonly profile: PlatformProfile) {}
+  constructor(private readonly profile: PlatformProfile, private readonly cache?: SceneArtifactCache) {}
   async run(ctx: RenderContext): Promise<RenderContext> {
     const rawClip = requireClip(ctx, this.name);
+    const key = deriveStageArtifactKey("compose", { rawClip, audioTracks: ctx.audioTracks, subtitles: ctx.subtitles, narration: ctx.narration, renderProfile: ctx.options.renderProfile ?? null });
+    const cached = await this.cache?.getOrLoadValue(key, isFinalVideo);
+    if (cached && await hasLiveFinalVideoArtifact(cached)) return { ...ctx, finalVideo: cached };
     const finalVideo = await this.profile.compose({
       rawClip,
       plannedDurationMs: Math.max(
@@ -318,7 +332,29 @@ class ComposeStage implements PipelineStage {
       narration: ctx.narration,
       ...(ctx.options.renderProfile ? { renderProfile: ctx.options.renderProfile } : {}),
     });
+    await this.cache?.putValuePersistent(key, finalVideo);
     return { ...ctx, finalVideo };
+  }
+}
+
+function isAudio(value: unknown): value is Audio {
+  return typeof value === "object" && value !== null && typeof (value as Audio).segmentId === "string" && typeof (value as Audio).path === "string" && typeof (value as Audio).durationMs === "number";
+}
+
+function isRawClip(value: unknown): value is RawClip {
+  return typeof value === "object" && value !== null && typeof (value as RawClip).path === "string" && typeof (value as RawClip).durationMs === "number" && typeof (value as RawClip).aspectRatio === "string" && Array.isArray((value as RawClip).scenes);
+}
+
+function isFinalVideo(value: unknown): value is FinalVideo {
+  return typeof value === "object" && value !== null && typeof (value as FinalVideo).path === "string" && typeof (value as FinalVideo).aspectRatio === "string";
+}
+
+/** A compose cache entry is reusable only while its materialized video remains a regular file. */
+async function hasLiveFinalVideoArtifact(video: FinalVideo): Promise<boolean> {
+  try {
+    return (await stat(video.path)).isFile();
+  } catch {
+    return false;
   }
 }
 
@@ -328,15 +364,15 @@ class ComposeStage implements PipelineStage {
 // one, or write your own from scratch) and pass it as render()'s last argument.
 export function defaultRenderStages(ports: RenderPorts): PipelineStage[] {
   return [
-    new SynthesizeVoiceStage(ports.voiceGen, ports.usageLedger),
-    new CaptureStage(ports.recordingEngine),
+    new SynthesizeVoiceStage(ports.voiceGen, ports.usageLedger, ports.sceneArtifactCache),
+    new CaptureStage(ports.recordingEngine, ports.sceneArtifactCache),
     new TrimPreRollStage(ports.preRollTrimmer),
     new PrivacyCutStage(ports.privacyCutter),
     new SceneSplitStage(ports.sceneSplitter),
     new EffectsStage(ports.effectsEngine, ports.sceneArtifactCache, ports.sceneRenderProfile),
     new SceneAssembleStage(ports.sceneAssembler),
     new DeriveSubtitlesStage(),
-    new ComposeStage(ports.platformProfile),
+    new ComposeStage(ports.platformProfile, ports.sceneArtifactCache),
   ];
 }
 
@@ -377,14 +413,17 @@ export async function renderWithContext(
     options,
     narration: options.narration ?? "both",
     finalVideo: null,
+    stageTimings: {},
   };
   for (const stage of stages) {
+    const startedAt = performance.now();
     ctx = await stage.run(ctx);
+    ctx = { ...ctx, stageTimings: { ...ctx.stageTimings, [stage.name]: performance.now() - startedAt } };
   }
   if (ctx.finalVideo === null) {
     throw new Error(
       "render(): stage list finished without producing a FinalVideo (missing a compose stage?)",
     );
   }
-  return { video: ctx.finalVideo, context: ctx };
+  return { video: ctx.finalVideo, context: ctx, stageTimings: ctx.stageTimings };
 }

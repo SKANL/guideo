@@ -176,6 +176,33 @@ describe("guideo validate", () => {
     ).resolves.toContain('required storyboard artifact is unavailable');
   });
 
+  it("requires a visual baseline when validate is invoked as a release gate", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-validate-release-"));
+    const { paths } = await writeRenderInputs(scratchDir);
+
+    const code = await runCli(
+      ["validate", "--project", "acme", "--release"],
+      validationContainer({
+        durationMs: 1_000,
+        hasVideo: true,
+        hasAudio: true,
+        videoCodec: "h264",
+        width: 1920,
+        height: 1080,
+      }),
+      scratchDir,
+      () => undefined,
+      () => undefined,
+    );
+
+    expect(code).toBe(1);
+    const report = JSON.parse(await readFile(paths.validationReportPath, "utf8"));
+    expect(report.promotion.criticalFailures).toContainEqual({
+      source: "visual",
+      message: "release promotion requires a visual baseline checkpoint report",
+    });
+  });
+
   it("samples a valid 19-second fixture before the endpoint with non-empty frames", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-validate-final-checkpoint-"));
     const { paths } = await writeRenderInputs(scratchDir, 19_000);

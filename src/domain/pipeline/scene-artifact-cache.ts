@@ -5,6 +5,8 @@ import type { ArtifactStore } from "../ports/artifact-store.js";
 
 export const SCENE_ARTIFACT_SCHEMA = "guideo.scene-artifact";
 export const SCENE_ARTIFACT_VERSION = 1;
+export const PIPELINE_ARTIFACT_SCHEMA = "guideo.pipeline-artifact";
+export const PIPELINE_ARTIFACT_VERSION = 1;
 
 export interface SceneArtifactCacheInput {
   readonly scene: SceneClip;
@@ -17,6 +19,13 @@ export interface SceneArtifactCacheInput {
 export interface CachedSceneArtifact {
   readonly ref: ArtifactManifest;
   readonly clip: SceneClip;
+}
+
+export function deriveStageArtifactKey(stage: string, input: unknown): ArtifactManifest {
+  return artifactManifest(PIPELINE_ARTIFACT_SCHEMA, PIPELINE_ARTIFACT_VERSION, {
+    stage: sha256(stage),
+    input: sha256(input),
+  });
 }
 
 export function deriveSceneArtifactKey(input: SceneArtifactCacheInput): ArtifactManifest {
@@ -32,6 +41,11 @@ export function deriveSceneArtifactKey(input: SceneArtifactCacheInput): Artifact
 interface PersistedSceneArtifact {
   readonly ref: ArtifactManifest;
   readonly clip: SceneClip;
+}
+
+interface PersistedArtifactValue {
+  readonly ref: ArtifactManifest;
+  readonly value: unknown;
 }
 
 function isSceneClip(value: unknown): value is SceneClip {
@@ -51,6 +65,7 @@ function isPersistedSceneArtifact(value: unknown, key: ArtifactManifest): value 
 /** Immutable scene cache with an optional durable backing store for process-independent reuse. */
 export class SceneArtifactCache {
   private readonly artifacts = new Map<string, CachedSceneArtifact>();
+  private readonly values = new Map<string, unknown>();
   constructor(private readonly store?: ArtifactStore) {}
 
   get(key: ArtifactManifest): CachedSceneArtifact | null {
@@ -77,5 +92,27 @@ export class SceneArtifactCache {
   async putPersistent(key: ArtifactManifest, artifact: CachedSceneArtifact): Promise<void> {
     this.put(key, artifact);
     if (this.store?.saveMaterialization) await this.store.saveMaterialization(key, new TextEncoder().encode(JSON.stringify(artifact)));
+  }
+
+  /** Reuses ArtifactStore materializations for every serializable expensive pipeline seam. */
+  async getOrLoadValue<T>(key: ArtifactManifest, isValue: (value: unknown) => value is T): Promise<T | null> {
+    const cached = this.values.get(key.sha256);
+    if (cached !== undefined) return isValue(cached) ? cached : null;
+    if (!this.store?.loadMaterialization) return null;
+    const bytes = await this.store.loadMaterialization(key);
+    if (bytes === null) return null;
+    try {
+      const persisted = JSON.parse(new TextDecoder().decode(bytes)) as PersistedArtifactValue;
+      if (persisted.ref?.schema !== key.schema || persisted.ref.version !== key.version || persisted.ref.sha256 !== key.sha256 || !isValue(persisted.value)) return null;
+      this.values.set(key.sha256, persisted.value);
+      return persisted.value;
+    } catch { return null; }
+  }
+
+  async putValuePersistent<T>(key: ArtifactManifest, value: T): Promise<void> {
+    this.values.set(key.sha256, value);
+    if (this.store?.saveMaterialization) {
+      await this.store.saveMaterialization(key, new TextEncoder().encode(JSON.stringify({ ref: key, value } satisfies PersistedArtifactValue)));
+    }
   }
 }

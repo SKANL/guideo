@@ -12,6 +12,7 @@ import {
   evaluateTimelineQuality,
 } from "../../domain/timeline/canonical-timeline.js";
 import { renderWithContext } from "../../domain/pipeline/pipeline.js";
+import { SceneArtifactCache } from "../../domain/pipeline/scene-artifact-cache.js";
 import type { EffectsEngine } from "../../domain/ports/effects.js";
 import type { PlatformProfile } from "../../domain/ports/platform-profile.js";
 import type { PreRollTrimmer } from "../../domain/ports/preroll-trimmer.js";
@@ -130,6 +131,10 @@ export async function runRender(
       .map((step) => step.narrationSegmentId),
   );
   const visibleSegments = script.segments.filter((segment) => visibleSegmentIds.has(segment.id));
+  if (narration === "voice" || narration === "both") {
+    const voice = container.voiceGen as VoiceGen & { preflight?: () => Promise<void> };
+    await voice.preflight?.();
+  }
   const reservation = await container.usageLedger?.reserve({
     operation: "render",
     estimate: { unit: "usd-micros", amount: 0 },
@@ -143,7 +148,7 @@ export async function runRender(
   try {
     await mkdir(dirname(outputPaths.outputPath), { recursive: true });
     await mkdir(dirname(outputPaths.captionsPath), { recursive: true });
-    const rendered = await renderWithContext(container, approved, script, temporaryVideoPath, {
+    const rendered = await renderWithContext({ ...container, sceneArtifactCache: new SceneArtifactCache(container.artifactStore), sceneRenderProfile: renderProfile }, approved, script, temporaryVideoPath, {
       narration,
       renderProfile,
     });

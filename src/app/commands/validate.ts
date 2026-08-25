@@ -44,6 +44,8 @@ export interface ValidateRenderInput {
   readonly uxEvidencePath?: string;
   /** A prior deterministic checkpoint artifact from the same render variant. */
   readonly visualBaselinePath?: string;
+  /** Apply the release promotion gate, which requires a visual baseline. */
+  readonly release?: boolean;
 }
 export interface ValidateRenderDependencies {
   readonly mediaProbe: MediaProbe;
@@ -130,6 +132,7 @@ export async function runValidate(
     ...(observability === undefined ? {} : { observability }),
     ...(artifacts.failures.length === 0 ? {} : { artifactFailures: artifacts.failures }),
     ...(visualBaseline === undefined ? {} : { visualBaseline }),
+    ...(input.release ? { release: true } : {}),
   });
   const technicalFailure =
     !physical.ok || promotion.criticalFailures.some((failure) => failure.source !== "ux");
