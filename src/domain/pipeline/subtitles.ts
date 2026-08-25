@@ -65,28 +65,21 @@ function caption(text: string, startMs: number, durationMs: number, placement: C
 }
 function timedCues(text: string, speech: TimedSpeech | undefined): readonly { readonly text: string; readonly startMs: number; readonly endMs: number }[] | undefined {
   if (!speech || speech.approximate || speech.words.length === 0) return undefined;
-  const phrases = captionCues(text).map((cue) => cue.replace("\n", " ").split(/\s+/));
+  const phrases = captionCues(text).map((cue) => ({
+    text: cue,
+    words: cue.replace("\n", " ").split(/\s+/),
+  }));
   const output: { text: string; startMs: number; endMs: number }[] = [];
   let cursor = 0;
   for (const phrase of phrases) {
-    const words = speech.words.slice(cursor, cursor + phrase.length);
-    if (words.length !== phrase.length || words.map((word) => word.text).join(" ") !== phrase.join(" ")) return undefined;
-    output.push({ text: phrase.join(" "), startMs: words[0]!.startMs, endMs: words.at(-1)!.endMs });
-    cursor += phrase.length;
+    const words = speech.words.slice(cursor, cursor + phrase.words.length);
+    if (words.length !== phrase.words.length || words.map((word) => word.text).join(" ") !== phrase.words.join(" ")) return undefined;
+    // Preserve the hard-wrap newline: merging word-timed cues can create an unbounded third line.
+    // Each cue is one short visual beat, anchored to provider timestamps without inventing timing.
+    output.push({ text: phrase.text, startMs: words[0]!.startMs, endMs: words.at(-1)!.endMs });
+    cursor += phrase.words.length;
   }
-  if (cursor !== speech.words.length) return undefined;
-  // Keep speech alignment when it is readable; otherwise merge adjacent phrase cues rather than
-  // flashing text faster than a viewer can consume it. No timestamps are invented.
-  const readable: typeof output = [];
-  for (let index = 0; index < output.length; index += 1) {
-    let cue = output[index]!;
-    while (index + 1 < output.length && (cue.text.replace(/\s/g, "").length * 1_000) / Math.max(1, cue.endMs - cue.startMs) > MAX_CAPTION_CHARS_PER_SECOND) {
-      const next = output[++index]!;
-      cue = { text: `${cue.text} ${next.text}`, startMs: cue.startMs, endMs: next.endMs };
-    }
-    readable.push(cue);
-  }
-  return readable;
+  return cursor === speech.words.length ? output : undefined;
 }
 export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], hints: CaptionLayoutHints | CaptionLayoutHintsBySegment = {}, speechTracks: readonly TimedSpeech[] = [], placementOverrides: ReadonlyMap<string, CaptionPlacement> = new Map(), viewport?: CaptionViewport): PlannedSubtitle[] {
   const rangeBySegmentId = new Map(scenes.map((scene) => [scene.narrationSegmentId, scene]));

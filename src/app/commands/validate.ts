@@ -16,6 +16,8 @@ import type { FrameCheckpointProbe } from "../../domain/ports/frame-checkpoint-p
 import type { MediaProbe } from "../../domain/ports/media-probe.js";
 import type { UsageLedger } from "../../domain/ports/usage-ledger.js";
 import { parseScript } from "../../domain/models/script.js";
+import { parseStoryboard } from "../../domain/models/storyboard.js";
+import { compareVisualBaseline, measureRenderObservability, type VisualBaselineReport } from "../../domain/quality/render-observability.js";
 import { type GuideoPaths, renderArtifactPaths } from "../paths.js";
 import {
   renderCheckpointReport,
@@ -40,6 +42,8 @@ export interface ValidateRenderInput {
   readonly profile: RenderProfileName;
   readonly narration: NarrationMode;
   readonly uxEvidencePath?: string;
+  /** A prior deterministic checkpoint artifact from the same render variant. */
+  readonly visualBaselinePath?: string;
 }
 export interface ValidateRenderDependencies {
   readonly mediaProbe: MediaProbe;
@@ -56,6 +60,7 @@ export interface ValidationReport {
     readonly sessions?: number;
     readonly source?: string;
   };
+  readonly visualBaseline?: VisualBaselineReport;
 }
 
 /** Validates an existing render from persisted inputs without creating a synthetic UX claim. */
@@ -64,11 +69,11 @@ export async function runValidate(
   input: ValidateRenderInput,
 ): Promise<ValidationReport> {
   const paths = renderArtifactPaths(input.paths, input.profile, input.narration);
-  const script = parseScript(JSON.parse(await readFile(paths.scriptPath, "utf8")));
-  const plannedDurationMs = script.segments.reduce(
+  const artifacts = await readValidationArtifacts(paths);
+  const plannedDurationMs = artifacts.script?.segments.reduce(
     (total, segment) => total + segment.timing.durationMs,
     0,
-  );
+  ) ?? 0;
   const checkpointsMs = [
     ...new Set([
       0,
@@ -91,6 +96,16 @@ export async function runValidate(
   });
   const ux = await readUxEvidence(input.uxEvidencePath);
   const usage = await dependencies.usageLedger.snapshot();
+  const observability = artifacts.script && artifacts.storyboard && artifacts.captions
+    ? measureRenderObservability({
+        segments: artifacts.script.segments,
+        storyboard: artifacts.storyboard,
+        captions: parseSrtIntervals(artifacts.captions),
+      })
+    : undefined;
+  const visualBaseline = input.visualBaselinePath
+    ? await readVisualBaseline(input.visualBaselinePath, physical.checkpoints)
+    : undefined;
   const viewport = renderProfileViewport(input.profile);
   const promotion = evaluatePromotion({
     media: physical.metadata,
@@ -101,7 +116,10 @@ export async function runValidate(
       minimumHeight: viewport.height,
       narration: input.narration,
     },
-    timeline: { expectedSegments: script.segments.length, actualSegments: script.segments.length },
+    timeline: {
+      expectedSegments: artifacts.script?.segments.length ?? 0,
+      actualSegments: artifacts.storyboard?.steps.length ?? 0,
+    },
     captions: {
       required: true,
       hasCaptions: physical.failures.every((failure) => !failure.includes("captions")),
@@ -109,6 +127,9 @@ export async function runValidate(
     usage,
     ux: ux.metrics ?? TECHNICAL_UX,
     uxEvidenceSource: ux.status === "real" ? "real" : "synthetic-baseline",
+    ...(observability === undefined ? {} : { observability }),
+    ...(artifacts.failures.length === 0 ? {} : { artifactFailures: artifacts.failures }),
+    ...(visualBaseline === undefined ? {} : { visualBaseline }),
   });
   const technicalFailure =
     !physical.ok || promotion.criticalFailures.some((failure) => failure.source !== "ux");
@@ -124,6 +145,7 @@ export async function runValidate(
             path: input.uxEvidencePath!,
             ...(ux.sessions === undefined ? {} : { sessions: ux.sessions, source: ux.source }),
           },
+    ...(visualBaseline === undefined ? {} : { visualBaseline }),
   };
   const checkpoint: RenderCheckpointReport = renderCheckpointReport({
     profile: input.profile,
@@ -136,6 +158,58 @@ export async function runValidate(
     writeFile(paths.checkpointReportPath, `${JSON.stringify(checkpoint, null, 2)}\n`, "utf8"),
   ]);
   return report;
+}
+
+async function readValidationArtifacts(paths: GuideoPaths): Promise<{
+  readonly script?: ReturnType<typeof parseScript>;
+  readonly storyboard?: ReturnType<typeof parseStoryboard>;
+  readonly captions?: string;
+  readonly failures: readonly string[];
+}> {
+  const [script, storyboard, captions] = await Promise.all([
+    readRequiredArtifact(paths.scriptPath, "script", (source) => parseScript(JSON.parse(source))),
+    readRequiredArtifact(paths.storyboardPath, "storyboard", (source) => parseStoryboard(JSON.parse(source))),
+    readRequiredArtifact(paths.captionsPath, "captions", (source) => source),
+  ]);
+  return {
+    ...(script.value === undefined ? {} : { script: script.value }),
+    ...(storyboard.value === undefined ? {} : { storyboard: storyboard.value }),
+    ...(captions.value === undefined ? {} : { captions: captions.value }),
+    failures: [script, storyboard, captions].flatMap((artifact) => artifact.failure ?? []),
+  };
+}
+
+async function readRequiredArtifact<T>(
+  path: string,
+  label: string,
+  parse: (source: string) => T,
+): Promise<{ readonly value?: T; readonly failure?: string }> {
+  try {
+    return { value: parse(await readFile(path, "utf8")) };
+  } catch (error) {
+    return { failure: `required ${label} artifact is unavailable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+function parseSrtIntervals(source: string): readonly { readonly startMs: number; readonly durationMs: number }[] {
+  return [...source.matchAll(/(\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2},\d{3})/g)].map(([, start, end]) => {
+    const startMs = parseSrtTimestamp(start!);
+    return { startMs, durationMs: Math.max(0, parseSrtTimestamp(end!) - startMs) };
+  });
+}
+
+function parseSrtTimestamp(value: string): number {
+  const [hours, minutes, secondsAndMs] = value.split(":");
+  const [seconds, milliseconds] = secondsAndMs!.split(",");
+  return ((Number(hours) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1_000 + Number(milliseconds);
+}
+
+async function readVisualBaseline(path: string, checkpoints: Parameters<typeof compareVisualBaseline>[0]): Promise<VisualBaselineReport> {
+  const baseline = JSON.parse(await readFile(path, "utf8")) as { readonly schema?: unknown; readonly checkpoints?: unknown };
+  if (baseline.schema !== "guideo.render-checkpoint-report" || !Array.isArray(baseline.checkpoints)) {
+    return { status: "failed", failures: ["visual baseline is not a guideo render checkpoint artifact"] };
+  }
+  return compareVisualBaseline(checkpoints, baseline.checkpoints as Parameters<typeof compareVisualBaseline>[1]);
 }
 
 async function readUxEvidence(path: string | undefined): Promise<{

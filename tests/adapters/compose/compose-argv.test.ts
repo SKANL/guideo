@@ -51,13 +51,24 @@ describe("buildComposeArgv — argv-array process boundary safety", () => {
     expect(argv).not.toContain("-c:a");
   });
 
-  it("reframes a vertical export with frame-preserving scale-and-pad rather than a target-losing crop", () => {
+  it("reframes a vertical export with an adaptive backdrop while preserving the sharp target layer", () => {
     const argv = buildComposeArgv({ ...baseParams, renderProfile: "shorts" }, "subs.srt", "shorts.mp4");
-    const vf = argv[argv.indexOf("-vf") + 1] as string;
+    const filterComplex = argv[argv.indexOf("-filter_complex") + 1] as string;
 
-    expect(vf).toContain("force_original_aspect_ratio=decrease");
-    expect(vf).toContain("pad=1080:1920");
-    expect(vf).not.toContain("crop=");
+    expect(filterComplex).toContain("[0:v]split=2");
+    expect(filterComplex).toContain("force_original_aspect_ratio=increase");
+    expect(filterComplex).toContain("crop=1080:1920");
+    expect(filterComplex).toContain("boxblur=20:10");
+    expect(filterComplex).toContain("force_original_aspect_ratio=decrease");
+    expect(filterComplex).toContain("overlay=(W-w)/2:(H-h)/2");
+    expect(argv).toEqual(expect.arrayContaining(["-map", "[vout]", "-map", "[aout]"]));
+  });
+
+  it("uses the smaller Shorts hardsub style rather than the legacy oversized caption scale", () => {
+    const argv = buildComposeArgv({ ...baseParams, narration: "subtitles", audioTracks: [], renderProfile: "shorts" }, "subs.srt", "shorts.mp4");
+    const filterComplex = argv[argv.indexOf("-filter_complex") + 1] as string;
+
+    expect(filterComplex).toContain("force_style='Fontsize=7,MarginV=28,MarginL=72,MarginR=72,Outline=0.7,Shadow=0'");
   });
   it("uses the professional H.264 delivery settings for the default export", () => {
     const argv = buildComposeArgv(baseParams, "subs.srt", "final.mp4");
@@ -352,7 +363,7 @@ describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in cap
       "-i",
       "clip.mp4",
       "-vf",
-      "subtitles='subs.srt':force_style='Fontsize=11,MarginV=28,MarginL=72,MarginR=72,Outline=1,Shadow=0'",
+      "subtitles='subs.srt':force_style='Fontsize=10,MarginV=28,MarginL=72,MarginR=72,Outline=0.8,Shadow=0'",
       "-map",
       "0:v",
       "-c:v",
@@ -393,7 +404,7 @@ describe('buildComposeArgv — narration mode "subtitles" (silent, burned-in cap
     const argv = buildComposeArgv(params, "subs.srt", "final.mp4");
 
     expect(argv[argv.indexOf("-vf") + 1]).toContain(
-      "force_style='Fontsize=11,MarginV=28,MarginL=72,MarginR=72,Outline=1,Shadow=0'",
+      "force_style='Fontsize=10,MarginV=28,MarginL=72,MarginR=72,Outline=0.8,Shadow=0'",
     );
   });
 

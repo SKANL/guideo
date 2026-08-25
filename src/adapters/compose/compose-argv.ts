@@ -25,10 +25,13 @@ function escapeForSubtitlesFilter(path: string): string {
 // Bottom-center captions remain within the 1080p action-safe area and use a restrained readable
 // size. This applies only to hardsubs; soft subtitle tracks preserve user-player styling.
 // Do not force Alignment here: each SRT cue's \an override is the authoritative safe placement.
-const BURNED_CAPTION_STYLE = "Fontsize=11,MarginV=28,MarginL=72,MarginR=72,Outline=1,Shadow=0";
+function burnedCaptionStyle(profile: ReturnType<typeof resolveRenderProfile>): string {
+  const { fontSize, outline } = profile.captionStyle;
+  return `Fontsize=${fontSize},MarginV=28,MarginL=72,MarginR=72,Outline=${outline},Shadow=0`;
+}
 
-function burnedSubtitleFilter(path: string): string {
-  return `subtitles=${escapeForSubtitlesFilter(path)}:force_style='${BURNED_CAPTION_STYLE}'`;
+function burnedSubtitleFilter(path: string, profile: ReturnType<typeof resolveRenderProfile>): string {
+  return `subtitles=${escapeForSubtitlesFilter(path)}:force_style='${burnedCaptionStyle(profile)}'`;
 }
 
 // Compares each audio track's scene startMs (from RawClip.scenes, matched by segmentId) against
@@ -89,10 +92,21 @@ export function buildComposeArgv(
   const paddingMs = params.plannedDurationMs === undefined
     ? 0
     : Math.max(0, params.plannedDurationMs - params.rawClip.durationMs);
+  const adaptiveComposition = buildFramePreservingFilter(profile);
   const frameFilter = [
-    buildFramePreservingFilter(profile),
     ...(paddingMs > 0 ? [`tpad=stop_mode=clone:stop_duration=${(paddingMs / 1_000).toFixed(3)}`] : []),
-  ].filter((value): value is string => Boolean(value)).join(",");
+  ].join(",");
+  const adaptiveVideoFilter = adaptiveComposition
+    ? [
+      adaptiveComposition,
+      ...(paddingMs > 0
+        ? [`[guideo_composed]tpad=stop_mode=clone:stop_duration=${(paddingMs / 1_000).toFixed(3)}[guideo_padded]`]
+        : []),
+    ].join(";")
+    : undefined;
+  const adaptiveOutputLabel = `[guideo_${paddingMs > 0 ? "padded" : "composed"}]`;
+  const adaptiveVideoGraph = (terminalFilter: string): string =>
+    `${adaptiveVideoFilter};${adaptiveOutputLabel}${terminalFilter}[vout]`;
   const targetDurationArgs = paddingMs > 0
     ? ["-t", (params.plannedDurationMs! / 1_000).toFixed(3)]
     : [];
@@ -104,9 +118,11 @@ export function buildComposeArgv(
       "-y",
       "-i",
       sanitizePositionalPath(params.rawClip.path),
-      ...((narration === "subtitles" || frameFilter) ? ["-vf", [frameFilter, narration === "subtitles" ? burnedSubtitleFilter(srtPath) : undefined].filter((value): value is string => Boolean(value)).join(",")] : []),
-      "-map",
-      "0:v",
+      ...(adaptiveVideoFilter
+        ? ["-filter_complex", adaptiveVideoGraph(narration === "subtitles" ? burnedSubtitleFilter(srtPath, profile) : "null"), "-map", "[vout]"]
+        : (narration === "subtitles" || frameFilter)
+          ? ["-vf", [frameFilter, narration === "subtitles" ? burnedSubtitleFilter(srtPath, profile) : undefined].filter((value): value is string => Boolean(value)).join(","), "-map", "0:v"]
+          : ["-map", "0:v"]),
       ...targetDurationArgs,
       ...buildProfessionalH264Args(),
       "-an",
@@ -137,11 +153,11 @@ export function buildComposeArgv(
     sanitizePositionalPath(params.rawClip.path),
     ...audioInputArgs,
     ...subtitleInputArgs,
-    ...(frameFilter ? ["-vf", frameFilter] : []),
+    ...(adaptiveVideoFilter ? [] : (frameFilter ? ["-vf", frameFilter] : [])),
     "-filter_complex",
-    audioFilterComplex,
+    adaptiveVideoFilter ? `${audioFilterComplex};${adaptiveVideoGraph("null")}` : audioFilterComplex,
     "-map",
-    "0:v",
+    adaptiveVideoFilter ? "[vout]" : "0:v",
     "-map",
     "[aout]",
     ...(includeSubtitles ? ["-map", `${subtitleInputIndex}:s`] : []),

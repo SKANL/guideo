@@ -73,6 +73,30 @@ describe("deriveSubtitles", () => {
     expect(subtitles.every((subtitle) => subtitle.text.split("\n").length <= 2)).toBe(true);
   });
 
+  it("keeps word-timed captions within two rendered lines while preserving their safe placement", () => {
+    const text = "Open the menu and choose the team workspace before inviting your next teammate.";
+    const words = text.split(" ").map((word, index) => ({
+      text: word,
+      startMs: index * 250,
+      endMs: (index + 1) * 250,
+    }));
+    const timedScript = parseScript({
+      segments: [{ id: "seg-1", text, timing: { startMs: 0, durationMs: 3000 } }],
+    });
+
+    const subtitles = deriveSubtitles(
+      timedScript,
+      [{ narrationSegmentId: "seg-1", startMs: 0, endMs: 3000 }],
+      { occupiedRegions: [{ x: 0, y: 430, w: 1280, h: 290 }] },
+      [{ segmentId: "seg-1", approximate: false, words }],
+    );
+
+    expect(subtitles).not.toHaveLength(0);
+    expect(subtitles.every((subtitle) => subtitle.text.split("\n").length <= 2)).toBe(true);
+    expect(subtitles.some((subtitle) => subtitle.text.includes("\n"))).toBe(true);
+    expect(subtitles.every((subtitle) => subtitle.placement === "top")).toBe(true);
+  });
+
   it("keeps captions compact and selects a non-overlapping safe placement when the lower third is occupied", () => {
     const subtitles = deriveSubtitles(
       script,

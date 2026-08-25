@@ -51,9 +51,17 @@ export async function validatePhysicalRender(
 ): Promise<PhysicalRenderValidationResult> {
   const nested = "request" in input;
   const request: PhysicalRenderValidationRequest | DirectInput = nested ? input.request : input;
-  const [metadata, captions, rawFrames] = await Promise.all([
+  const [metadata, captionsResult, rawFrames] = await Promise.all([
     input.mediaProbe.probe(request.videoPath),
-    nested ? input.readText(input.request.srtPath) : Promise.resolve(input.captions),
+    nested
+      ? input.readText(input.request.srtPath).then(
+          (captions) => ({ captions }),
+          (error: unknown) => ({
+            captions: "",
+            readFailure: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      : Promise.resolve({ captions: input.captions }),
     nested
       ? input.frameProbe.capture(request.videoPath, request.checkpointsMs)
       : input.frameProbe.extract(request.videoPath, request.checkpointsMs),
@@ -66,6 +74,8 @@ export async function validatePhysicalRender(
         sha256: createHash("sha256").update(frame.bytes).digest("hex"),
       }));
   const failures: string[] = [];
+  const captions = captionsResult.captions;
+  const captionsReadFailure = "readFailure" in captionsResult ? captionsResult.readFailure : undefined;
   const scenario = physicalRenderValidationScenario(request.profile, request.narration);
   if (!metadata.hasVideo) failures.push("MP4 has no video stream");
   if (metadata.videoCodec !== undefined && metadata.videoCodec !== "h264")
@@ -94,6 +104,8 @@ export async function validatePhysicalRender(
       failures.push(`${request.narration} output must not contain an audio stream`);
     }
   }
+  if (captionsReadFailure !== undefined)
+    failures.push(`captions sidecar could not be read: ${captionsReadFailure}`);
   if (captions.trim().length === 0) failures.push("captions sidecar is empty");
   if (!SRT_CUE.test(captions.trim())) {
     failures.push("SRT sidecar has no valid caption cue");

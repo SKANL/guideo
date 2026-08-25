@@ -24,12 +24,16 @@ describe("deriveSubtitles speech timing", () => {
     expect(subtitles.every((cue) => cue.text.split("\n").length <= 2)).toBe(true);
   });
 
-  it("merges too-fast adjacent phrases so a caption never exceeds the readable rate", () => {
+  it("keeps word-timed phrase boundaries so a caption never exceeds two lines", () => {
     const script = parseScript({ segments: [{ id: "s1", text: "Click now, then save.", timing: { startMs: 0, durationMs: 2_000 } }] });
     const subtitles = deriveSubtitles(script, [{ narrationSegmentId: "s1", startMs: 0, endMs: 2_000 }], {}, [{ segmentId: "s1", approximate: false, words: [
       { text: "Click", startMs: 0, endMs: 100 }, { text: "now,", startMs: 100, endMs: 250 }, { text: "then", startMs: 250, endMs: 500 }, { text: "save.", startMs: 500, endMs: 1_500 },
     ] }]);
 
-    expect(subtitles).toMatchObject([{ text: "Click now, then save.", startMs: 0, durationMs: 1_500 }]);
+    expect(subtitles).toMatchObject([
+      { text: "Click now,", startMs: 0, durationMs: 250 },
+      { text: "then save.", startMs: 250, durationMs: 1_250 },
+    ]);
+    expect(subtitles.every((cue) => cue.text.split("\n").length <= 2)).toBe(true);
   });
 });

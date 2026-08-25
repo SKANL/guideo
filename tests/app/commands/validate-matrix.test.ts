@@ -22,6 +22,10 @@ describe("runValidateMatrix", () => {
         segments: [{ id: "fixture", text: "Fixture", timing: { startMs: 0, durationMs: 1000 } }],
       }),
     );
+    await writeFile(
+      paths.storyboardPath,
+      JSON.stringify({ steps: [{ action: "navigate", narrationSegmentId: "fixture" }] }),
+    );
     for (const scenario of PHYSICAL_RENDER_VALIDATION_MATRIX) {
       const variant = renderArtifactPaths(paths, scenario.profile, scenario.narration);
       await mkdir(join(variant.guideoDir, "output"), { recursive: true });
@@ -71,9 +75,16 @@ describe("runValidateMatrix", () => {
     );
     expect(artifact.status).toBe("passed");
     expect(artifact.scenarios).toHaveLength(9);
+    expect(artifact.scenarios).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "shorts-both", expected: { width: 1080, height: 1920, hasAudio: true } }),
+      expect.objectContaining({ id: "square-silent", expected: { width: 1080, height: 1080, hasAudio: false } }),
+    ]));
     expect(JSON.parse(await readFile(paths.physicalRenderMatrixReportPath, "utf8"))).toMatchObject({
       schema: "guideo.physical-render-matrix-artifact",
       status: "passed",
+      scenarios: expect.arrayContaining([
+        expect.objectContaining({ id: "youtube-subtitles", expected: { width: 1920, height: 1080, hasAudio: false } }),
+      ]),
     });
   });
 });

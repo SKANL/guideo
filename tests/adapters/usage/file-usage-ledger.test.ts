@@ -28,7 +28,10 @@ describe("FileUsageLedger provider-cost contract", () => {
         provider: "elevenlabs",
       });
 
-      expect(await ledger.snapshot()).toEqual({ spent: 4, reserved: 0, unit: "usd-micros" });
+      expect(await ledger.snapshot()).toEqual({
+        spent: 4, reserved: 0, unit: "usd-micros", cacheHits: 0, cacheSavings: 0,
+        cacheByOperation: { voice: { hits: 0, savings: 0, spent: 4 } },
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -127,6 +130,22 @@ describe("FileUsageLedger concurrency", () => {
       const ledger = new FileUsageLedger(join(root, "usage.json"), { limit: 10 });
       const reservation = await ledger.reserve({ operation: "scene-effects", estimated: 5 });
       await ledger.commit(reservation.id, { unit: "usd-micros", amount: 0, cache: "hit", avoidedAmount: 5 });
-      expect(await ledger.snapshot()).toEqual({ spent: 0, reserved: 0, unit: "usd-micros", cacheHits: 1, cacheSavings: 5 });
+      expect(await ledger.snapshot()).toEqual({ spent: 0, reserved: 0, unit: "usd-micros", cacheHits: 1, cacheSavings: 5, cacheByOperation: { "scene-effects": { hits: 1, savings: 5, spent: 0 } } });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("attributes cache savings to the originating stage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guideo-ledger-"));
+    try {
+      const ledger = new FileUsageLedger(join(root, "usage.json"), { limit: 10 });
+      const reservation = await ledger.reserve({ operation: "discover", estimated: 1 });
+      await ledger.commit(reservation.id, { unit: "usd-micros", amount: 0, cache: "hit", avoidedAmount: 1 });
+
+      const miss = await ledger.reserve({ operation: "discover", estimated: 3 });
+      await ledger.commit(miss.id, { unit: "usd-micros", amount: 3, cache: "miss" });
+
+      expect(await ledger.snapshot()).toMatchObject({
+        cacheByOperation: { discover: { hits: 1, savings: 1, spent: 3 } },
+      });
     } finally { await rm(root, { recursive: true, force: true }); }
   });

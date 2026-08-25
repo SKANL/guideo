@@ -8,22 +8,32 @@ function words(text: string): Set<string> {
   return new Set(text.toLowerCase().match(WORD_PATTERN) ?? []);
 }
 
+function matches(node: FlowGraph["nodes"][number], query: Set<string>): boolean {
+  return [...words(`${node.feature} ${node.useCase}`)].some((word) => query.has(word));
+}
+
+function sequencePosition(node: FlowGraph["nodes"][number], stages: readonly Set<string>[]): number | null {
+  for (let index = 0; index < stages.length; index += 1) {
+    if (matches(node, stages[index]!)) return index;
+  }
+  return null;
+}
+
 // Pure in-memory query: returns only the FlowGraph node/edge subset relevant to a Brief's idea,
 // matched by keyword overlap against each node's feature/useCase — no disk re-reads, satisfying
 // spec's discovery-flowgraph "in-memory query" requirement. An edge is included only when both
 // endpoints are in the matched node subset.
 export function queryRoutes(graph: FlowGraph, brief: Brief): FlowGraphRoutes {
   const ideaWords = words(brief.idea);
-  const matchedNodes = graph.nodes.filter((node) => {
-    const nodeWords = words(`${node.feature} ${node.useCase}`);
-    for (const word of nodeWords) {
-      if (ideaWords.has(word)) return true;
-    }
-    return false;
-  });
+  const matchedNodes = graph.nodes.filter((node) => matches(node, ideaWords));
   const matchedIds = new Set(matchedNodes.map((node) => node.id));
-  const matchedEdges = graph.edges.filter(
-    (edge) => matchedIds.has(edge.from) && matchedIds.has(edge.to),
-  );
+  const stages = brief.idea.split(/\bthen\b/i).map(words).filter((stage) => stage.size > 0);
+  const positions = new Map(matchedNodes.map((node) => [node.id, sequencePosition(node, stages)]));
+  const matchedEdges = graph.edges.filter((edge) => {
+    if (!matchedIds.has(edge.from) || !matchedIds.has(edge.to)) return false;
+    const from = positions.get(edge.from);
+    const to = positions.get(edge.to);
+    return from === null || from === undefined || to === null || to === undefined || from <= to;
+  });
   return { nodes: matchedNodes, edges: matchedEdges };
 }

@@ -28,14 +28,26 @@ describe("queryRoutes", () => {
     expect(routes.edges).toEqual([]);
   });
 
-  it("includes an edge only when both endpoints are in the matched subset", () => {
+  it("includes the forward edge for a sequenced brief when both endpoints match", () => {
     const brief = parseBrief({
       idea: "Show login then invite a teammate",
       targetPlatform: "youtube",
     });
     const routes = queryRoutes(graph, brief);
     expect(routes.nodes.map((node) => node.id).sort()).toEqual(["n1", "n2"]);
-    expect(routes.edges).toHaveLength(2);
+    expect(routes.edges).toEqual([{ from: "n1", to: "n2", action: "click" }]);
+  });
+
+  it("preserves only the forward semantic path for a login-then-action brief", () => {
+    const brief = parseBrief({
+      idea: "Sign in, then invite a teammate",
+      targetPlatform: "youtube",
+    });
+
+    const routes = queryRoutes(graph, brief);
+
+    expect(routes.nodes.map((node) => node.id)).toEqual(["n1", "n2"]);
+    expect(routes.edges).toEqual([{ from: "n1", to: "n2", action: "click" }]);
   });
 
   it("returns an empty subset when nothing matches", () => {

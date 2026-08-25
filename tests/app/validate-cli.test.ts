@@ -55,6 +55,11 @@ async function writeRenderInputs(
     }),
     { encoding: "utf8", flush: true },
   );
+  await writeFile(
+    paths.storyboardPath,
+    JSON.stringify({ steps: [{ action: "pause", narrationSegmentId: "intro" }] }),
+    { encoding: "utf8", flush: true },
+  );
   const uxPath = join(paths.guideoDir, "synthetic-ux.json");
   await writeFile(
     uxPath,
@@ -148,6 +153,7 @@ describe("guideo validate", () => {
   it("writes a report and exits nonzero for a technical render failure", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-validate-failure-"));
     const { paths } = await writeRenderInputs(scratchDir);
+    await rm(paths.storyboardPath);
 
     const code = await runCli(
       ["validate", "--project", "acme", "--profile", "youtube", "--narration", "both"],
@@ -167,7 +173,7 @@ describe("guideo validate", () => {
     expect(code).toBe(1);
     await expect(
       readFile(join(paths.guideoDir, "validation-report.json"), "utf8"),
-    ).resolves.toContain('"status": "failed"');
+    ).resolves.toContain('required storyboard artifact is unavailable');
   });
 
   it("samples a valid 19-second fixture before the endpoint with non-empty frames", async () => {

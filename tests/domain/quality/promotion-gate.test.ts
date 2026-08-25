@@ -6,7 +6,7 @@ const input = {
   quality: { expectedDurationMs: 3_000, narration: "silent" as const },
   timeline: { expectedSegments: 1, actualSegments: 1 },
   captions: { required: false, hasCaptions: false },
-  usage: { spent: 12, reserved: 0, unit: "usd-micros" as const, cacheHits: 2, cacheSavings: 9 },
+  usage: { spent: 12, reserved: 0, unit: "usd-micros" as const, cacheHits: 2, cacheSavings: 9, cacheByOperation: { voice: { hits: 2, savings: 9, spent: 12 } } },
   ux: { targetComprehension: 0.9, resultComprehension: 0.9, captionDistraction: 0.1, professionalismTrust: 0.9, retentionProxy: 0.8 },
 };
 
@@ -16,7 +16,7 @@ describe("promotion gate", () => {
       status: "promoted", criticalFailures: [], quality: { status: "passed", failures: [] },
       ux: { status: "passed", score: 0.88, failures: [] },
       uxEvidenceSource: "synthetic-baseline",
-      usage: { spent: 12, reserved: 0, unit: "usd-micros", cacheHits: 2, cacheSavings: 9 },
+      usage: { spent: 12, reserved: 0, unit: "usd-micros", cacheHits: 2, cacheSavings: 9, byOperation: { voice: { hits: 2, savings: 9, spent: 12 } } },
     });
   });
 
@@ -37,6 +37,21 @@ describe("promotion gate", () => {
       uxEvidenceSource: "synthetic-baseline",
       usage: { spent: 12, reserved: 1, unit: "usd-micros", cacheHits: 0, cacheSavings: 0 },
     });
+  });
+
+  it("blocks technically valid renders with visual quality or baseline regressions", () => {
+    const report = evaluatePromotion({
+      ...input,
+      observability: { deadAirMs: 1_500, captionOverlapMs: 20, zoomsWithoutTarget: 1 },
+      visualBaseline: { status: "failed", failures: ["frame checkpoint 1500ms differs from visual baseline"] },
+    });
+    expect(report.status).toBe("blocked");
+    expect(report.criticalFailures).toEqual(expect.arrayContaining([
+      { source: "quality", message: "dead air 1500ms exceeds 1000ms promotion limit" },
+      { source: "quality", message: "captions overlap for 20ms" },
+      { source: "quality", message: "1 zoom effect lacks a target" },
+      { source: "visual", message: "frame checkpoint 1500ms differs from visual baseline" },
+    ]));
   });
 });
 

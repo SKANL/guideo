@@ -14,6 +14,8 @@ export interface PhysicalRenderMatrixArtifact {
     readonly id: string;
     readonly profile: RenderProfileName;
     readonly narration: NarrationMode;
+    /** Self-describing expected physical contract for deterministic CI artifacts. */
+    readonly expected: { readonly width: number; readonly height: number; readonly hasAudio: boolean };
     readonly outputPath: string;
     readonly captionsPath: string;
     readonly checkpointReportPath: string;
@@ -40,17 +42,19 @@ export async function runValidateMatrix(
         id: scenario.id,
         profile: scenario.profile,
         narration: scenario.narration,
+        expected: { width: scenario.width, height: scenario.height, hasAudio: scenario.hasAudio },
         outputPath: variantPaths.outputPath,
         captionsPath: variantPaths.captionsPath,
         checkpointReportPath: variantPaths.checkpointReportPath,
         validationStatus: report.status,
-        failures: report.physical.failures,
+        failures: report.promotion.criticalFailures.map((failure) => `${failure.source}: ${failure.message}`),
       });
     } catch (error) {
       scenarios.push({
         id: scenario.id,
         profile: scenario.profile,
         narration: scenario.narration,
+        expected: { width: scenario.width, height: scenario.height, hasAudio: scenario.hasAudio },
         outputPath: variantPaths.outputPath,
         captionsPath: variantPaths.captionsPath,
         checkpointReportPath: variantPaths.checkpointReportPath,

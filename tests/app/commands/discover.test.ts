@@ -13,6 +13,7 @@ import type {
   BudgetRequest,
   Reservation,
   UsageActual,
+  UsageCommit,
   UsageLedger,
   UsageSnapshot,
 } from "../../../src/domain/ports/usage-ledger.js";
@@ -44,13 +45,13 @@ class MemoryArtifactStore implements ArtifactStore {
 
 class CountingLedger implements UsageLedger {
   reserves = 0;
-  commits: UsageActual[] = [];
+  commits: UsageCommit[] = [];
   releases = 0;
   async reserve(request: BudgetRequest): Promise<Reservation> {
     this.reserves += 1;
     return { id: String(this.reserves), request };
   }
-  async commit(_id: string, actual: UsageActual) {
+  async commit(_id: string, actual: UsageCommit) {
     this.commits.push(actual);
   }
   async release(_id: string, _reason: string) {
@@ -216,7 +217,7 @@ describe("runDiscover", () => {
     expect(written).toEqual(secondGraph);
   });
 
-  it("reuses a finalized, valid discovered graph without reserving quota", async () => {
+  it("reuses a finalized, valid discovered graph without spending quota", async () => {
     scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
     const paths = projectPaths({ project: "test-project", cwd: scratchDir });
     const graph: FlowGraph = {
@@ -230,7 +231,35 @@ describe("runDiscover", () => {
     const ledger = new CountingLedger();
     await runDiscover({ target: second, artifactStore: store, usageLedger: ledger }, paths);
     expect(second.discoverCalls).toBe(0);
-    expect(ledger.reserves).toBe(0);
+    expect(ledger.reserves).toBe(1);
+    expect(ledger.commits).toEqual([{
+      unit: "usd-micros",
+      amount: 0,
+      cache: "hit",
+      avoidedAmount: 1,
+    }]);
+  });
+
+  it("records the avoided discover spend as a cache hit without consuming quota", async () => {
+    scratchDir = await mkdtemp(join(tmpdir(), "guideo-discover-test-"));
+    const paths = projectPaths({ project: "test-project", cwd: scratchDir });
+    const graph: FlowGraph = {
+      nodes: [{ id: "n1", feature: "invite", useCase: "Invite", preconditions: [], selectors: {} }],
+      edges: [],
+    };
+    const store = new MemoryArtifactStore();
+    await runDiscover({ target: new FakeTarget(graph), artifactStore: store }, paths);
+    const ledger = new CountingLedger();
+
+    await runDiscover({ target: new FakeTarget(graph), artifactStore: store, usageLedger: ledger }, paths);
+
+    expect(ledger.reserves).toBe(1);
+    expect(ledger.commits).toEqual([{
+      unit: "usd-micros",
+      amount: 0,
+      cache: "hit",
+      avoidedAmount: 1,
+    }]);
   });
 
   it("reuses cached semantic evidence and only re-discovers after deterministic fingerprint invalidation", async () => {

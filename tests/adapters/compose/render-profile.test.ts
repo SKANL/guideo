@@ -15,8 +15,11 @@ describe("render profiles", () => {
   it("uses scale-and-pad rather than crop for non-landscape delivery, preserving every discovered target", () => {
     const filter = buildFramePreservingFilter(resolveRenderProfile("shorts"));
 
+    expect(filter).toContain("split=2");
+    expect(filter).toContain("force_original_aspect_ratio=increase");
+    expect(filter).toContain("crop=1080:1920");
+    expect(filter).toContain("boxblur=");
     expect(filter).toContain("force_original_aspect_ratio=decrease");
-    expect(filter).toContain("pad=1080:1920");
-    expect(filter).not.toContain("crop=");
+    expect(filter).toContain("overlay=(W-w)/2:(H-h)/2");
   });
 });

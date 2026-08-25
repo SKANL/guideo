@@ -20,7 +20,7 @@ export interface BudgetRequest {
   readonly estimated?: number;
 }
 export interface Reservation { readonly id: string; readonly request: BudgetRequest; }
-export interface UsageSnapshot { readonly spent: number; readonly reserved: number; readonly unit?: UsageUnit; /** Additive cache telemetry; absent for legacy ledgers. */ readonly cacheHits?: number; readonly cacheSavings?: number; }
+export interface UsageSnapshot { readonly spent: number; readonly reserved: number; readonly unit?: UsageUnit; /** Additive cache telemetry; absent for legacy ledgers. */ readonly cacheHits?: number; readonly cacheSavings?: number; readonly cacheByOperation?: Readonly<Record<string, { readonly hits: number; readonly savings: number; readonly spent: number }>>; }
 export type UsageCommit = UsageResult | UsageActual;
 export interface UsageLedger {
   reserve(request: BudgetRequest): Promise<Reservation>;

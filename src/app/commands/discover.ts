@@ -46,7 +46,10 @@ export async function runDiscover(
     probe.fingerprint,
     probe.cacheSafe,
   );
-  if (cached) return { graph: cached, path: paths.flowGraphPath };
+  if (cached) {
+    await recordCacheHit(container.usageLedger, "discover", 1);
+    return { graph: cached, path: paths.flowGraphPath };
+  }
 
   const maxAttempts = options.maxAttempts ?? 2;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
@@ -83,6 +86,24 @@ export async function runDiscover(
     }
     throw error;
   }
+}
+
+async function recordCacheHit(
+  ledger: UsageLedger | undefined,
+  operation: string,
+  avoidedAmount: number,
+): Promise<void> {
+  if (!ledger) return;
+  const reservation = await ledger.reserve({
+    operation,
+    estimate: { unit: "usd-micros", amount: 0 },
+  });
+  await ledger.commit(reservation.id, {
+    unit: "usd-micros",
+    amount: 0,
+    cache: "hit",
+    avoidedAmount,
+  });
 }
 
 async function loadFinalizedCache(
