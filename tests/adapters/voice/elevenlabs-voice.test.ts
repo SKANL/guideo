@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ElevenLabsSdkClient,
@@ -81,12 +82,12 @@ describe("ElevenLabsVoice", () => {
     });
   });
 
-  it("preserves provider word timing and complete audio provenance when the provider exposes alignment", async () => {
+  it("decodes the SDK timestamp response and preserves provider word timing", async () => {
     const voice = new ElevenLabsVoice({
       textToSpeech: {
         convert: async () => bytesToStream(new Uint8Array(0)),
         convertWithTimestamps: async () => ({
-          audio: bytesToStream(new Uint8Array([1, 2, 3])),
+          audioBase64: Buffer.from([1, 2, 3]).toString("base64"),
           alignment: {
             characters: ["G", "o", " ", "n", "o", "w"],
             characterStartTimesSeconds: [0, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -105,6 +106,7 @@ describe("ElevenLabsVoice", () => {
         { text: "now", startMs: 1_300, endMs: 1_600 },
       ],
     });
+    await expect(readFile(result.audio.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
     expect(result.audio.provenance).toMatchObject({
       audioSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       provider: "elevenlabs",
@@ -112,6 +114,29 @@ describe("ElevenLabsVoice", () => {
       voiceId: "voice-1",
       seed: 7,
       measuredCost: { unit: "usd-micros", amount: 18, cache: "miss" },
+    });
+  });
+
+  it("supports legacy timestamp responses that expose audio as a stream", async () => {
+    const voice = new ElevenLabsVoice({
+      textToSpeech: {
+        convert: async () => bytesToStream(new Uint8Array(0)),
+        convertWithTimestamps: async () => ({
+          audio: bytesToStream(new Uint8Array([1, 2, 3])),
+          alignment: {
+            characters: ["G", "o"],
+            characterStartTimesSeconds: [0, 0.1],
+            characterEndTimesSeconds: [0.1, 0.2],
+          },
+        }),
+      },
+    });
+
+    const audio = await voice.synthesize({ id: "seg-1", text: "Go", timing: { startMs: 0, durationMs: 900 } });
+
+    expect(audio.speech).toEqual({
+      approximate: false,
+      words: [{ text: "Go", startMs: 0, endMs: 200 }],
     });
   });
 

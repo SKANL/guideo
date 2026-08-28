@@ -11,13 +11,37 @@ function fallbackWords(text: string, startMs: number, durationMs: number): WordT
   const words = text.trim().split(/\s+/).filter(Boolean); const base = Math.floor(durationMs / Math.max(words.length, 1));
   return words.map((word, index) => ({ text: word, startMs: startMs + base * index, endMs: index === words.length - 1 ? startMs + durationMs : startMs + base * (index + 1) }));
 }
+
+function normalizeProviderWords(words: readonly WordTiming[], startMs: number, endMs: number): WordTiming[] {
+  return words.flatMap((word) => {
+    const normalizedStartMs = Math.max(word.startMs, startMs);
+    const normalizedEndMs = Math.min(word.endMs, endMs);
+    return normalizedStartMs < normalizedEndMs
+      ? [{ ...word, startMs: normalizedStartMs, endMs: normalizedEndMs }]
+      : [];
+  });
+}
+
 export function buildCanonicalTimeline(input: TimelineInput) {
   const supplied = new Map(input.speech?.map((track) => [track.segmentId, track]) ?? []);
-  const speech = input.script.segments.map((segment) => supplied.get(segment.id) ?? { segmentId: segment.id, words: fallbackWords(segment.text, segment.timing.startMs, segment.timing.durationMs), approximate: true });
-  const captions = input.script.segments.map((segment) => {
+  const speech = input.script.segments.map((segment) => {
     const track = supplied.get(segment.id);
+    return track
+      ? { ...track, words: normalizeProviderWords(track.words, segment.timing.startMs, segment.timing.startMs + segment.timing.durationMs) }
+      : { segmentId: segment.id, words: fallbackWords(segment.text, segment.timing.startMs, segment.timing.durationMs), approximate: true };
+  });
+  const speechBySegment = new Map(speech.map((track) => [track.segmentId, track]));
+  let previousCaptionEndMs = Number.NEGATIVE_INFINITY;
+  const captions = input.script.segments.flatMap((segment) => {
+    const track = speechBySegment.get(segment.id);
     const words = track?.words;
-    return { text: segment.text, startMs: words?.[0]?.startMs ?? segment.timing.startMs, endMs: words?.at(-1)?.endMs ?? segment.timing.startMs + segment.timing.durationMs, source: track && !track.approximate ? "provider" as const : "approximate" as const, ...(track?.provenance ? { provenance: track.provenance } : {}) };
+    if (track && !track.approximate && words?.length === 0) return [];
+    const segmentEndMs = segment.timing.startMs + segment.timing.durationMs;
+    const startMs = Math.max(words?.[0]?.startMs ?? segment.timing.startMs, previousCaptionEndMs);
+    const endMs = Math.min(words?.at(-1)?.endMs ?? segmentEndMs, segmentEndMs);
+    if (startMs >= endMs) return [];
+    previousCaptionEndMs = endMs;
+    return [{ text: segment.text, startMs, endMs, source: track && !track.approximate ? "provider" as const : "approximate" as const, ...(track?.provenance ? { provenance: track.provenance } : {}) }];
   });
   const canonical = { speech, captions, actions: input.actions ?? [], cues: input.cues ?? [], pauses: input.pauses ?? [] }; const hash = sha256(canonical);
   return { ...canonical, hash, qaHash: hash };

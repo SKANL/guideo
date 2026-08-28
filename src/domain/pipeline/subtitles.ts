@@ -81,6 +81,35 @@ function timedCues(text: string, speech: TimedSpeech | undefined): readonly { re
   }
   return cursor === speech.words.length ? output : undefined;
 }
+function normalizeTimedCues(cues: readonly { readonly text: string; readonly startMs: number; readonly endMs: number }[], range: SceneRange): readonly { readonly text: string; readonly startMs: number; readonly endMs: number }[] {
+  const normalized: { text: string; startMs: number; endMs: number }[] = [];
+  let previousEndMs = range.startMs;
+  for (const cue of cues) {
+    const startMs = Math.max(range.startMs, previousEndMs, cue.startMs);
+    const endMs = Math.min(range.endMs, cue.endMs);
+    // Invalid provider timing has no truthful duration inside this scene. Dropping it is safer
+    // than manufacturing a caption interval that cannot be traced to word alignment.
+    if (endMs <= startMs) continue;
+    normalized.push({ text: cue.text, startMs, endMs });
+    previousEndMs = endMs;
+  }
+  return normalized;
+}
+function normalizeSubtitleTimeline(subtitles: readonly PlannedSubtitle[]): PlannedSubtitle[] {
+  const ordered = subtitles.map((subtitle, index) => ({ subtitle, index })).sort((left, right) =>
+    left.subtitle.startMs - right.subtitle.startMs || left.index - right.index,
+  );
+  const normalized: PlannedSubtitle[] = [];
+  let previousEndMs = Number.NEGATIVE_INFINITY;
+  for (const { subtitle } of ordered) {
+    const startMs = Math.max(subtitle.startMs, previousEndMs);
+    const endMs = subtitle.startMs + subtitle.durationMs;
+    if (endMs <= startMs) continue;
+    normalized.push(caption(subtitle.text, startMs, endMs - startMs, subtitle.placement));
+    previousEndMs = endMs;
+  }
+  return normalized;
+}
 export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], hints: CaptionLayoutHints | CaptionLayoutHintsBySegment = {}, speechTracks: readonly TimedSpeech[] = [], placementOverrides: ReadonlyMap<string, CaptionPlacement> = new Map(), viewport?: CaptionViewport): PlannedSubtitle[] {
   const rangeBySegmentId = new Map(scenes.map((scene) => [scene.narrationSegmentId, scene]));
   const speechBySegmentId = new Map(speechTracks.map((speech) => [speech.segmentId, speech]));
@@ -92,7 +121,7 @@ export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], h
     const placement = placementOverrides.get(segment.id);
     const timed = timedCues(segment.text, speechBySegmentId.get(segment.id));
     if (timed) {
-      subtitles.push(...timed.map((cue) => caption(cue.text, cue.startMs, cue.endMs - cue.startMs, placement ?? placementFor(segmentHints))));
+      subtitles.push(...normalizeTimedCues(timed, range).map((cue) => caption(cue.text, cue.startMs, cue.endMs - cue.startMs, placement ?? placementFor(segmentHints))));
       continue;
     }
     const cues = captionCues(segment.text); let startMs = range.startMs;
@@ -105,5 +134,5 @@ export function deriveSubtitles(script: Script, scenes: readonly SceneRange[], h
       startMs += durationMs; remainingDurationMs -= durationMs; remainingWeight -= weight;
     }
   }
-  return subtitles;
+  return normalizeSubtitleTimeline(subtitles);
 }

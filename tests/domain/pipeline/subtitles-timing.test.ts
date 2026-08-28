@@ -36,4 +36,32 @@ describe("deriveSubtitles speech timing", () => {
     ]);
     expect(subtitles.every((cue) => cue.text.split("\n").length <= 2)).toBe(true);
   });
+
+  it("clamps provider cues to their scene ranges and removes caption overlap deterministically", () => {
+    const script = parseScript({ segments: [
+      { id: "s1", text: "Open settings, then save.", timing: { startMs: 0, durationMs: 4_500 } },
+      { id: "s2", text: "Confirm changes.", timing: { startMs: 4_500, durationMs: 2_000 } },
+    ] });
+    const subtitles = deriveSubtitles(script, [
+      { narrationSegmentId: "s1", startMs: 0, endMs: 4_500 },
+      { narrationSegmentId: "s2", startMs: 4_500, endMs: 6_500 },
+    ], {}, [
+      { segmentId: "s1", approximate: false, words: [
+        { text: "Open", startMs: 0, endMs: 1_000 }, { text: "settings,", startMs: 1_000, endMs: 8_916 },
+        { text: "then", startMs: 2_000, endMs: 2_500 }, { text: "save.", startMs: 2_500, endMs: 3_000 },
+      ] },
+      { segmentId: "s2", approximate: false, words: [
+        { text: "Confirm", startMs: 4_400, endMs: 5_000 }, { text: "changes.", startMs: 5_000, endMs: 5_500 },
+      ] },
+    ]);
+
+    expect(subtitles).toMatchObject([
+      { text: "Open settings,", startMs: 0, durationMs: 4_500 },
+      { text: "Confirm changes.", startMs: 4_500, durationMs: 1_000 },
+    ]);
+    expect(subtitles.slice(1).every((cue, index) => {
+      const previous = subtitles[index];
+      return previous !== undefined && previous.startMs + previous.durationMs <= cue.startMs;
+    })).toBe(true);
+  });
 });

@@ -20,4 +20,13 @@ describe("canonical timeline", () => {
     expect(timeline.captions).toEqual([{ text: "Go now", startMs: 20, endMs: 900, source: "provider", provenance: { audioSha256: "a".repeat(64), provider: "elevenlabs", model: "model-1", voiceId: "voice-1", seed: 7, measuredCost: { unit: "usd-micros", amount: 18, cache: "miss" } } }]);
     expect(evaluateTimelineQuality(timeline)).toEqual({ status: "passed", failures: [] });
   });
+  it("clamps provider word timing to its segment without extending caption evidence", () => {
+    const timeline = buildCanonicalTimeline({ script: { segments: [{ id: "s1", text: "Real provider timing", timing: { startMs: 0, durationMs: 4_500 } }] }, speech: [{ segmentId: "s1", words: [{ text: "Real", startMs: 0, endMs: 8_916 }], approximate: false }] });
+    expect(timeline.speech[0]?.words).toEqual([{ text: "Real", startMs: 0, endMs: 4_500 }]);
+    expect(timeline.captions).toEqual([{ text: "Real provider timing", startMs: 0, endMs: 4_500, source: "provider" }]);
+  });
+  it("keeps provider captions from overlapping their predecessor", () => {
+    const timeline = buildCanonicalTimeline({ script: { segments: [{ id: "s1", text: "First", timing: { startMs: 0, durationMs: 4_500 } }, { id: "s2", text: "Second", timing: { startMs: 4_000, durationMs: 2_000 } }] }, speech: [{ segmentId: "s1", words: [{ text: "First", startMs: 0, endMs: 4_500 }], approximate: false }, { segmentId: "s2", words: [{ text: "Second", startMs: 4_000, endMs: 6_000 }], approximate: false }] });
+    expect(timeline.captions).toEqual([{ text: "First", startMs: 0, endMs: 4_500, source: "provider" }, { text: "Second", startMs: 4_500, endMs: 6_000, source: "provider" }]);
+  });
 });

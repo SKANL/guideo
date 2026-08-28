@@ -47,7 +47,7 @@ export interface ElevenLabsSdkClient {
     convertWithTimestamps?(
       voiceId: string,
       request: ElevenLabsTextToSpeechRequest,
-    ): Promise<unknown>;
+    ): Promise<ElevenLabsTimestampResponse>;
   };
   readonly voices?: {
     get(voiceId: string): Promise<{ readonly voiceId?: unknown; readonly voice_id?: unknown }>;
@@ -59,6 +59,17 @@ export interface ElevenLabsAlignment {
   readonly characterStartTimesSeconds: readonly number[];
   readonly characterEndTimesSeconds: readonly number[];
 }
+
+export type ElevenLabsTimestampResponse =
+  | {
+    readonly audioBase64: string;
+    readonly alignment?: ElevenLabsAlignment;
+  }
+  | {
+    /** Compatibility shape used by older SDK wrappers and injected clients. */
+    readonly audio: ReadableStream<Uint8Array>;
+    readonly alignment?: ElevenLabsAlignment;
+  };
 
 // mp3_<sampleRate>_<kbps> is the only output-format family this adapter can derive an exact
 // duration from via byte-length math (CBR assumption). Other formats (pcm/ulaw/alaw, or a VBR
@@ -136,7 +147,7 @@ export class ElevenLabsVoice implements VoiceGen {
     // API, so let the environment pick one without a code/calibration change.
     const voiceId = this.voiceId();
 
-    let stream: ReadableStream<Uint8Array>;
+    let bytes: Buffer;
     let alignment: ElevenLabsAlignment | undefined;
     try {
       const request = {
@@ -146,11 +157,13 @@ export class ElevenLabsVoice implements VoiceGen {
         voiceSettings: { stability, similarityBoost, style, useSpeakerBoost, speed },
       };
       if (client.textToSpeech.convertWithTimestamps) {
-        const response = await client.textToSpeech.convertWithTimestamps(voiceId, request) as { readonly audio: ReadableStream<Uint8Array>; readonly alignment?: ElevenLabsAlignment };
-        stream = response.audio;
+        const response = await client.textToSpeech.convertWithTimestamps(voiceId, request);
         alignment = response.alignment;
+        bytes = "audioBase64" in response
+          ? Buffer.from(response.audioBase64, "base64")
+          : await readAllBytes(response.audio);
       } else {
-        stream = await client.textToSpeech.convert(voiceId, request);
+        bytes = await readAllBytes(await client.textToSpeech.convert(voiceId, request));
       }
     } catch (error) {
       throw new Error(
@@ -158,7 +171,6 @@ export class ElevenLabsVoice implements VoiceGen {
       );
     }
 
-    const bytes = await readAllBytes(stream);
     const workDir = await mkdtemp(join(tmpdir(), "guideo-voice-"));
     const path = join(workDir, `${segment.id}-${randomUUID()}.mp3`);
     await writeFile(path, bytes);
